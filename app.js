@@ -94,7 +94,7 @@ const PRESETS = [
       "Entry taken at the sweep area rather than waiting for the fib zone. Target 1:3 regardless.",
     ],
     invalidation:"If the sweep isn't obvious, this isn't the model — wait for the fib zone instead. Anything under 3 RR.",
-    failureMode:"",
+    failureMode:"The obvious sweep was the start of a real breakout — a reversal entered into continuation. No confirmation is the point of this model, so nothing tells me to stand down. I find out at the stop.",
   },
   {
     name:"Fib zone entry",
@@ -114,7 +114,7 @@ const PRESETS = [
       "Fib taken again from the 0.786. Stop sits on the sweep, entry further away from it, 2.5 RR minimum off that stop.",
     ],
     invalidation:"No sweep-and-break — a 0.786 tap on its own is not an entry. Anything under 2.5 RR. The 1H fighting the 4H bias.",
-    failureMode:"",
+    failureMode:"Tap, small sweep, micro-break, then straight through: the zone was mid-range rather than an extreme, so the sweep was noise. Variants — range pulled off the wrong swing, so the fib sat on a bad foundation; fading a leg that is still trending; stop on the sweep wick too tight to survive the retrace.",
   },
 ];
 
