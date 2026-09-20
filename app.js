@@ -128,10 +128,13 @@ const PRE_TRADE = [
   {id:"calm",   q:"Not FOMO, not revenge, not tired"},
 ];
 
+/* NF is not a fourth outcome, it's the absence of one: the limit never filled,
+   so it costs nothing, counts for nothing, and doesn't spend one of the day's two. */
 const RESULTS = [
   {k:"TP", label:"TP"},
   {k:"BE", label:"BE"},
   {k:"SL", label:"SL"},
+  {k:"NF", label:"Not filled"},
 ];
 
 /* FX sessions, decided in UTC so the answer doesn't change with the device's clock. */
@@ -142,6 +145,17 @@ function sessionFor(d){
   if(h >= 16 && h < 21) return "NY";
   return "Asia";
 }
+/* Asia opens at 21:00 UTC. The rule is to be flat and written up before then,
+   because the spreads at the Asian open are not worth being in. */
+function asiaOpen(){
+  const now=new Date();
+  const o=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate(),21,0,0));
+  if(o<=now) o.setUTCDate(o.getUTCDate()+1);
+  return o;
+}
+const hoursToAsia = () => (asiaOpen()-new Date())/3600000;
+const asiaOpenLocal = () => asiaOpen().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+
 function sessionFromFields(date,time){
   if(!date || !time) return null;
   const d = new Date(`${date}T${time}`);
@@ -204,6 +218,7 @@ function slPips(pair,entry,sl){
    rather than a flat −1%, because a C setup only ever had 0.25% on the table. */
 function pctOf(t){
   const rp = num(t.riskPct);
+  if(t.result==="NF") return 0;          // limit never filled — nothing happened
   if(t.result==="SL") return rp==null ? null : -rp;
   if(t.result==="BE") return 0;
   if(t.result==="TP") return num(t.resultPct);
@@ -215,17 +230,27 @@ function pctOf(t){
 function rOf(t){
   if(t.result==="SL") return -1;
   if(t.result==="BE") return 0;
+  if(t.result==="NF") return null;
   const p = pctOf(t), rp = num(t.riskPct);
+  // A trade mapped at grade "—" risked nothing, so R is undefined. That's a
+  // missing ratio, not a missing outcome — never let it decide whether a trade closed.
   return (p!=null && rp) ? p/rp : null;
 }
 
-const isOpen = t => t.result==null && num(t.pnl)==null && (t.exit==null || t.exit==="");
+const isOpen = t => !t.result && num(t.pnl)==null && (t.exit==null || t.exit==="");
+/* Once you've said how it closed, that IS the outcome. Only trades from before
+   results existed get classified from their numbers. */
 function outcomeOf(t){
+  if(t.result==="NF") return "Not filled";
+  if(t.result==="TP") return "Win";
+  if(t.result==="SL") return "Loss";
+  if(t.result==="BE") return "BE";
   if(isOpen(t)) return "Open";
-  const r=rOf(t); if(r==null) return "Open";
-  return r>0.02 ? "Win" : r<-0.02 ? "Loss" : "BE";
+  const p=pctOf(t); if(p==null) return "Open";
+  return p>0.001 ? "Win" : p<-0.001 ? "Loss" : "BE";
 }
-const closedTrades = () => S.trades.filter(t=>!isOpen(t) && !t.hypothetical);
+/* Statistics only count trades that actually happened. */
+const closedTrades = () => S.trades.filter(t=>!isOpen(t) && !t.hypothetical && t.result!=="NF");
 const openTrades   = () => S.trades.filter(isOpen);
 /* EOD owns exactly one queue: trades with no result yet. Saving a result
    moves the trade out of EOD and into All trades. */
@@ -246,7 +271,8 @@ function inPeriod(dateStr,period){
 /* ---------- the rules, made live ---------- */
 function guard(){
   const a=S.account, t=today(), acct=num(a.size)||0;
-  const todays=S.trades.filter(x=>x.date===t && !x.hypothetical);
+  // A limit that never filled was never an execution, so it doesn't spend one of the two.
+  const todays=S.trades.filter(x=>x.date===t && !x.hypothetical && x.result!=="NF");
   const done=todays.filter(x=>!isOpen(x));
 
   const rToday=done.reduce((s,x)=>s+(rOf(x)??0),0);
@@ -508,8 +534,20 @@ function screenHome(){
   const ck=(S.checkDate===today()) ? Object.values(S.checks).filter(Boolean).length : 0;
   const op=openTrades();
 
-  const status = blocked
-    ? `<div class="status stop"><span class="dot"></span><div><b>Done for the day.</b> ${esc(G.blocks[0])}</div></div>`
+  const unmarked=S.trades.filter(t=>t.date===today() && !t.result).length;
+  const eodDue=unmarked>0 && hoursToAsia()<=3;
+
+  const status = eodDue
+    ? `<div class="status warn"><span class="dot"></span><div>
+         <b>${unmarked} ${unmarked===1?"trade":"trades"} still unmarked.</b>
+         Asia opens ${asiaOpenLocal()} — be flat and written up before then.
+         <button class="link" data-go="eod" style="display:block;margin-top:5px">Write them up</button>
+       </div></div>`
+    : blocked
+    ? `<div class="status stop"><span class="dot"></span><div><b>Done for the day.</b> ${esc(G.blocks[0])}
+         ${G.blocks[0].includes("trades taken")
+           ? `<button class="link" data-go="settings" style="display:block;margin-top:5px">Change your daily limit</button>`:""}
+       </div></div>`
     : G.warns.length
     ? `<div class="status warn"><span class="dot"></span><div>${esc(G.warns[0])}</div></div>`
     : `<div class="status"><span class="dot"></span><div><b>${a.maxTradesDay-G.todays.length} of ${a.maxTradesDay}</b> trades left today${G.done.length?` · ${asR(G.rToday)} so far`:""}</div></div>`;
@@ -579,7 +617,7 @@ function screenHome(){
 function tradeItem(t){
   const o=outcomeOf(t), pct=pctOf(t);
   const c = o==="Win"?"var(--up)" : o==="Loss"?"var(--down)"
-          : o==="BE"?"var(--flat)" : "var(--blue)";
+          : o==="BE"?"var(--flat)" : o==="Not filled"?"var(--tx-3)" : "var(--blue)";
   return `<button class="item" data-trade="${esc(t.id)}">
     <span class="bar" style="background:${c}"></span>
     <span class="main">
@@ -588,9 +626,10 @@ function tradeItem(t){
       ${t.grade&&t.grade!=="—"?`<span class="tag" style="margin-left:4px">${esc(t.grade)}</span>`:""}
       <span class="mt">${esc(t.date||"")} ${esc(t.time||"")}${t.session?" · "+esc(t.session):""}${t.model?" · "+esc(t.model):""}</span>
     </span>
-    <span class="val ${tone(pct)}">${o==="Open"
-      ? `<span class="tag open">OPEN</span>`
-      : `${asPct(pct)}`}</span>
+    <span class="val ${tone(pct)}">${
+      o==="Open"       ? `<span class="tag open">OPEN</span>`
+    : o==="Not filled" ? `<span class="tag">NOT FILLED</span>`
+    : asPct(pct)}</span>
   </button>`;
 }
 
@@ -1061,12 +1100,15 @@ function screenReview(){
     <input class="n" inputmode="decimal" data-d="resultPct" value="${esc(d.resultPct??"")}" placeholder="e.g. 2.5">
     <span class="why">Of the account. ${d.riskPct?`You risked ${fx(d.riskPct,2)}%.`:""}</span></div>`:""}
 
-  ${d.result?`<div class="metrics" style="grid-template-columns:1fr 1fr;margin-top:20px">
+  ${(d.result && d.result!=="NF")?`<div class="metrics" style="grid-template-columns:1fr 1fr;margin-top:20px">
     <div class="metric"><div class="k">Account</div><div class="v s ${tone(pct)}">${asPct(pct)}</div></div>
     <div class="metric"><div class="k">R</div><div class="v s ${tone(r)}">${asR(r)}</div></div>
   </div>
   ${d.result==="SL"?`<p class="hint" style="margin-top:12px">A full stop-out on a
     ${d.grade||"—"} setup: −1R, which was ${fx(num(d.riskPct)||0,2)}% of the account.</p>`:""}`:""}
+  ${d.result==="NF"?`<p class="hint" style="margin-top:18px">The limit never filled, so nothing
+    happened. It won't count toward your two trades and it stays out of the stats — but it's
+    still logged, so you can see how often your entries get missed.</p>`:""}
 
   <hr class="rule">
   <div class="sec-t">Chart after</div>

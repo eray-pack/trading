@@ -1,7 +1,7 @@
 /* Caches the app shell so the journal opens instantly, even on a bad connection.
    Trade data always comes from the network — a stale P&L is worse than no P&L. */
 
-const CACHE = "confluence-v5";
+const CACHE = "confluence-v6";
 const SHELL = [
   "./",
   "./index.html",
