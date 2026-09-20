@@ -193,6 +193,39 @@ p{margin:0}
 .tfblock{margin-bottom:22px}
 .tfblock .tf{display:inline-block;margin-bottom:9px;background:var(--raise)}
 textarea.test{min-height:64px;font-size:.92rem;color:var(--tx-2)}
+
+/* ---------- screenshot drop ---------- */
+.drop{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;
+  min-height:128px;border:1px dashed var(--hair-2);border-radius:var(--r);
+  color:var(--tx-2);font-size:.95rem;cursor:pointer;text-align:center;padding:20px;
+}
+.drop:active{background:var(--raise)}
+.drop input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.drop .sm{font-size:.79rem;color:var(--tx-3)}
+.drop:focus-within{border-color:var(--blue);border-style:solid}
+
+/* ---------- confidence + result ---------- */
+.chips.conf5 .chip{flex:1;text-align:center;padding-inline:0}
+.chips.res{gap:9px}
+.chips.res .chip{
+  flex:1;text-align:center;font-family:var(--mono);font-size:1rem;
+  letter-spacing:.05em;padding-block:15px;
+}
+.chips.res .chip.tp[aria-pressed="true"]{background:var(--up);color:#06101F}
+.chips.res .chip.be[aria-pressed="true"]{background:var(--tx-3);color:#06101F}
+.chips.res .chip.sl[aria-pressed="true"]{background:var(--down);color:#2A0A0E}
+
+/* ---------- what you wrote at entry ---------- */
+.said{
+  background:var(--raise);border-radius:var(--r-sm);padding:16px 17px;
+  display:flex;flex-direction:column;gap:11px;font-size:.92rem;line-height:1.5;
+  color:var(--tx-2);
+}
+.said b{
+  display:block;font-family:var(--mono);font-size:.66rem;text-transform:uppercase;
+  letter-spacing:.11em;color:var(--tx-3);font-weight:500;margin-bottom:2px;
+}
 .auto{
   font-family:var(--mono);font-size:.66rem;letter-spacing:.04em;
   color:var(--blue-lift);background:rgba(41,98,255,.14);

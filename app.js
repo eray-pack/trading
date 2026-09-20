@@ -73,28 +73,66 @@ const CHECKLIST = [
 ];
 const CHECK_ITEMS = CHECKLIST.flatMap(([,items]) => items);
 
-/* Eray's process, ready to drop into a new model. Written from his own description,
-   so the wording is his — the two blanks at the end are the ones only he can fill. */
-const PRESET = {
-  name:"Fib 0.786 orderflow reversal",
-  minRR:2.5,
-  sessions:"London, Overlap",
-  pairs:"XAUUSD",
-  confluences:[
-    "Orderblocks mapped, bias decided",
-    "Price in the 0.786 of the orderflow range",
-    "Swept, then broke, with the bias",
-    "Entry off the fib, stop on the sweep",
-  ],
-  tests:[
-    "Important orderblocks drawn and a direction written down before anything else is opened. Zones mark where price is most likely heading.",
-    "The 1H carries the 4H idea through rather than fighting it. Fib pulled from the extreme high to the extreme low of the orderflow range, and price is inside the 0.786.",
-    "Liquidity swept and structure broken back in the direction of the orderflow. 5M counts. A 0.786 tap on its own is not this.",
-    "Fib taken again from the 0.786. Stop sits on the sweep, entry further away from it, 2.5 RR minimum measured off that stop.",
-  ],
-  invalidation:"No sweep-and-break — a 0.786 tap on its own is not an entry. Anything under 2.5 RR. The 1H fighting the 4H bias.",
-  failureMode:"",
-};
+/* The two ways he takes the same read. Same 4H/1H work up top; they split at the entry.
+   Written from his own description — the failure-mode blanks are his to fill. */
+const PRESETS = [
+  {
+    name:"Sweep entry",
+    minRR:3,
+    sessions:"London, Overlap",
+    pairs:"XAUUSD",
+    confluences:[
+      "Orderblocks mapped, bias decided",
+      "Orderflow range marked, price into the zone",
+      "The sweep is obvious",
+      "Enter from the sweep area, 1:3",
+    ],
+    tests:[
+      "Important orderblocks drawn and a direction written down before anything else is opened.",
+      "Extreme high to extreme low of the orderflow range marked, and price has arrived in the zone.",
+      "No squinting required. If you have to argue for it, this is not the sweep-entry model.",
+      "Entry taken at the sweep area rather than waiting for the fib zone. Target 1:3 regardless.",
+    ],
+    invalidation:"If the sweep isn't obvious, this isn't the model — wait for the fib zone instead. Anything under 3 RR.",
+    failureMode:"",
+  },
+  {
+    name:"Fib zone entry",
+    minRR:2.5,
+    sessions:"London, Overlap",
+    pairs:"XAUUSD",
+    confluences:[
+      "Orderblocks mapped, bias decided",
+      "Price in the 0.786 of the orderflow range",
+      "LTF zone inside the fib zone, sweep one end, CHoCH/BOS the other",
+      "Entry off the fib, stop on the sweep",
+    ],
+    tests:[
+      "Important orderblocks drawn and a direction written down before anything else is opened.",
+      "Fib pulled from the extreme high to the extreme low of the orderflow range; price is inside the 0.786.",
+      "There is a zone on the LTF coming off the fib zone too. The high and low of the fib zone are obvious: one end took the sweep, the other made a CHoCH on the LTF or a BOS on the HTF.",
+      "Fib taken again from the 0.786. Stop sits on the sweep, entry further away from it, 2.5 RR minimum off that stop.",
+    ],
+    invalidation:"No sweep-and-break — a 0.786 tap on its own is not an entry. Anything under 2.5 RR. The 1H fighting the 4H bias.",
+    failureMode:"",
+  },
+];
+
+/* Ticked on the map screen, saved onto the trade — so skipping one becomes measurable
+   rather than just regrettable. */
+const PRE_TRADE = [
+  {id:"drawn",  q:"Levels drawn and screenshot taken, before entry"},
+  {id:"stopsw", q:"Stop is on the sweep, not a pip count"},
+  {id:"rr",     q:"RR is above my floor"},
+  {id:"sess",   q:"In session, no news due in the next 30 minutes"},
+  {id:"calm",   q:"Not FOMO, not revenge, not tired"},
+];
+
+const RESULTS = [
+  {k:"TP", label:"TP"},
+  {k:"BE", label:"BE"},
+  {k:"SL", label:"SL"},
+];
 
 /* FX sessions, decided in UTC so the answer doesn't change with the device's clock. */
 function sessionFor(d){
@@ -146,7 +184,10 @@ function toast(msg){
 
 /** R multiple. Broker P&L wins whenever it exists — it's what actually hit the account. */
 function rOf(t){
-  const risk=num(t.riskUsd), pnl=num(t.pnl);
+  const risk=num(t.riskUsd);
+  if(t.result==="SL") return -1;
+  if(t.result==="BE") return 0;
+  const pnl = t.result==="TP" ? pnlFromResult(t) : num(t.pnl);
   if(pnl!=null && risk) return pnl/risk;
   const e=num(t.entry), s=num(t.sl), x=num(t.exit);
   if(e==null||s==null||x==null) return null;
@@ -154,6 +195,7 @@ function rOf(t){
   return t.direction==="Short" ? (e-x)/d : (x-e)/d;
 }
 function pnlOf(t){
+  if(t.result){ const p=pnlFromResult(t); if(p!=null) return p; }
   const p=num(t.pnl); if(p!=null) return p;
   const r=rOf(t), risk=num(t.riskUsd);
   return (r!=null && risk) ? r*risk : null;
@@ -173,7 +215,21 @@ function slPips(pair,entry,sl){
   const e=num(entry), s=num(sl);
   return (e==null||s==null) ? null : Math.abs(e-s)/inst(pair).pip;
 }
-const isOpen = t => num(t.pnl)==null && (t.exit==null || t.exit==="");
+/* TP/SL/BE is the end-of-day input; everything numeric follows from it.
+   SL logs a full −1R — the whole amount that was at risk — rather than a flat −1%,
+   because a C setup only ever had 0.25% on the table. */
+function pnlFromResult(t){
+  const risk = num(t.riskUsd) || 0;
+  if(t.result==="SL") return -risk;
+  if(t.result==="BE") return 0;
+  if(t.result==="TP"){
+    const pct = num(t.resultPct);
+    return pct==null ? null : (num(S.account.size)||0) * pct/100;
+  }
+  return null;
+}
+
+const isOpen = t => t.result==null && num(t.pnl)==null && (t.exit==null || t.exit==="");
 function outcomeOf(t){
   if(isOpen(t)) return "Open";
   const r=rOf(t); if(r==null) return "Open";
@@ -181,6 +237,8 @@ function outcomeOf(t){
 }
 const closedTrades = () => S.trades.filter(t=>!isOpen(t) && !t.hypothetical);
 const openTrades   = () => S.trades.filter(isOpen);
+/* Anything still missing a result, or closed but never reviewed. */
+const needsWriteup = () => S.trades.filter(t => isOpen(t) || !t.reviewNotes);
 
 function weekStart(s){
   const d=new Date(s+"T00:00:00");
@@ -245,6 +303,7 @@ const tradeFromRow = r => ({
   entryReason:r.entry_reason, slReason:r.sl_reason, tpReason:r.tp_reason,
   reviewNotes:r.review_notes, chartBefore:r.chart_before, chartAfter:r.chart_after,
   hypothetical:r.hypothetical, mappedMode:r.mapped_mode, liqBuildup:r.liq_buildup,
+  result:r.result, resultPct:r.result_pct, mentalNotes:r.mental_notes, checks:r.checks||[],
 });
 const tradeToRow = t => ({
   user_id:S.user.id, trade_date:t.date||today(), trade_time:t.time||"",
@@ -258,6 +317,8 @@ const tradeToRow = t => ({
   review_notes:t.reviewNotes||"", chart_before:t.chartBefore||null,
   chart_after:t.chartAfter||null, hypothetical:!!t.hypothetical,
   mapped_mode:t.mappedMode||"now", liq_buildup:!!t.liqBuildup,
+  result:t.result||null, result_pct:num(t.resultPct),
+  mental_notes:t.mentalNotes||"", checks:t.checks||[],
   updated_at:new Date().toISOString(),
 });
 const modelFromRow = r => ({
@@ -427,6 +488,7 @@ const PATHS = {
   gear:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/>',
 };
 const ic = k => `<svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">${PATHS[k]}</svg>`;
+const tickSVG = `<svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>`;
 
 const head = (title,to="home") => `<div class="head">
   <button class="ico" data-go="${to}" aria-label="Back">${ic("back")}</button>
@@ -481,9 +543,10 @@ function screenHome(){
       ${ic("plus")}<span class="t">Now</span>
       <span class="c">${blocked?"blocked":`${sessionFor(new Date())} · live`}</span>
     </button>
-    <button class="tile eod" data-map="eod" ${blocked?"disabled":""}>
+    <button class="tile eod" data-go="eod">
       ${ic("moon")}<span class="t">EOD</span>
-      <span class="c">${blocked?"blocked":"after the fact"}</span>
+      <span class="c">${(()=>{const n=needsWriteup().length;
+        return n?`${n} to write up`:"all written up";})()}</span>
     </button>
   </div>
   <div class="tiles">
@@ -713,7 +776,8 @@ function screenModelEdit(){
   <hr class="rule">
   <div class="rowb" style="margin-bottom:6px">
     <div class="sec-t" style="margin:0">The four confluences, top down</div>
-    ${!d.id?`<button class="link" data-act="preset">Use my strategy</button>`:""}
+    ${!d.id?`<span class="row" style="gap:14px">${PRESETS.map((p,i)=>
+      `<button class="link" data-preset="${i}">${esc(p.name)}</button>`).join("")}</span>`:""}
   </div>
   <p class="hint" style="margin-bottom:20px">One per timeframe. Each must be binary —
   if it needs a paragraph to decide, it's a feeling, not a confluence.</p>
@@ -759,6 +823,24 @@ function screenTrade(){
     Writing it up after the fact. Set the time it actually happened and the session
     follows it.</p>`:""}
 
+  <div class="sec-t">Chart at entry — levels drawn</div>
+  ${d.chartBefore
+    ? `<img class="shot" data-shot="${esc(d.chartBefore)}" alt="Chart at entry">
+       <button class="link" style="margin-top:10px" data-act="rmshot" data-which="chartBefore">Replace</button>`
+    : `<label class="drop"><input type="file" accept="image/*" data-shot="chartBefore">
+         <span>Add the screenshot</span>
+         <span class="sm">Before the entry, not after</span></label>`}
+
+  <hr class="rule">
+  <div class="sec-t">Before I click</div>
+  <div class="conflist">${PRE_TRADE.map(it=>{
+    const on=(d.checks||[]).includes(it.id);
+    return `<button class="conf ${on?"on":""}" data-gate="${it.id}" aria-pressed="${on}">
+      <span class="ctext">${esc(it.q)}</span>
+      <span class="box">${on?tickSVG:""}</span></button>`;
+  }).join("")}</div>
+
+  <hr class="rule">
   <div class="field"><span class="lab">Instrument</span>
     <select data-d="pair">${Object.keys(INSTRUMENTS).map(p=>
       `<option ${d.pair===p?"selected":""}>${p}</option>`).join("")}</select></div>
@@ -843,52 +925,112 @@ function screenTrade(){
     <textarea data-d="tpReason" placeholder="Which liquidity are you aiming at?">${esc(d.tpReason)}</textarea></div>
 
   <hr class="rule">
-  <div class="field"><span class="lab">Confidence</span>
-    <div class="chips">${[1,2,3,4,5].map(i=>
+  <div class="field"><span class="lab">How confident am I?</span>
+    <div class="chips conf5">${[1,2,3,4,5].map(i=>
       `<button class="chip" data-set="confidence" data-val="${i}" aria-pressed="${+d.confidence===i}">${i}</button>`).join("")}</div></div>
-  <div class="field"><span class="lab">Mental state</span>
+  <div class="field"><span class="lab">Right now I am</span>
     <div class="chips">${MENTAL.map(x=>
       `<button class="chip" data-set="mentalBefore" data-val="${x}" aria-pressed="${d.mentalBefore===x}">${x}</button>`).join("")}</div></div>
   ${["FOMO","Revenge","Tired"].includes(d.mentalBefore)
-    ? `<p class="note bad">Your own rules say that's a no-trade.</p>` : ""}
+    ? `<p class="note bad" style="margin-bottom:22px">Your own rules say that's a no-trade.</p>` : ""}
+  <div class="field" style="margin-bottom:0"><span class="lab">Mental state, in your own words</span>
+    <textarea data-d="mentalNotes" placeholder="How you're actually feeling walking into this one.">${esc(d.mentalNotes||"")}</textarea></div>
 
-  <hr class="rule">
-  <div class="sec-t">Chart before</div>
-  ${d.chartBefore
-    ? `<img class="shot" data-shot="${esc(d.chartBefore)}" alt="Chart at entry">
-       <button class="link" style="margin-top:10px" data-act="rmshot" data-which="chartBefore">Remove</button>`
-    : `<input type="file" accept="image/*" data-shot="chartBefore">`}
-  ${editing?`<div class="sec-t" style="margin-top:24px">Chart after</div>
-    ${d.chartAfter
-      ? `<img class="shot" data-shot="${esc(d.chartAfter)}" alt="Chart at exit">
-         <button class="link" style="margin-top:10px" data-act="rmshot" data-which="chartAfter">Remove</button>`
-      : `<input type="file" accept="image/*" data-shot="chartAfter">`}`:""}
+  ${editing&&!isOpen(d)?`<p class="hint" style="margin-top:26px">
+    Result and review live in the EOD write-up.</p>`:""}
 
-  ${editing?`
-  <hr class="rule">
-  <div class="sec-t">Outcome</div>
-  <div class="two" style="margin-bottom:20px">
-    <div class="field"><span class="lab">Net P&amp;L</span>
-      <input class="n" inputmode="decimal" data-d="pnl" value="${esc(d.pnl??"")}" placeholder="from cTrader"></div>
-    <div class="field"><span class="lab">Exit price</span>
-      <input class="n" inputmode="decimal" data-d="exit" value="${esc(d.exit??"")}"></div>
+  <div class="btnrow">
+    <button class="btn pri" data-act="savetrade">${editing?"Save":"Log it"}</button>
+    ${editing?`<button class="btn del" data-act="deltrade" style="flex:0 0 auto;width:auto;padding-inline:22px">Delete</button>`:""}
+  </div>`;
+}
+
+/* ---------- EOD: pick a trade, then write it up ---------- */
+
+function screenEod(){
+  const pending=needsWriteup();
+  const done=S.trades.filter(t=>!needsWriteup().includes(t));
+  return `${head("End of day")}
+  <p class="hint" style="margin-bottom:22px">Pick the trade you want to write up. You'll see the
+  chart and the thesis exactly as you left them at entry.</p>
+  ${pending.length
+    ? `<div class="sec-t">Waiting on you</div><div class="list">${pending.map(tradeItem).join("")}</div>`
+    : `<div class="blank"><h3>Nothing waiting</h3>
+       <p class="hint">Every trade has a result and a review.</p></div>`}
+  ${done.length?`<div class="sec">
+    <div class="sec-t">Already written up</div>
+    <div class="list">${done.slice(0,10).map(tradeItem).join("")}</div>
+  </div>`:""}`;
+}
+
+function screenReview(){
+  const d=S.draft;
+  const r=rOf(d), pnl=pnlOf(d);
+  const acct=num(S.account.size)||0;
+  const pct=acct&&pnl!=null ? pnl/acct*100 : null;
+
+  return `${head("Write it up","eod")}
+
+  <div class="rowb" style="margin-bottom:18px">
+    <div>
+      <div class="nm num" style="font-size:1.1rem">${esc(d.pair)} ${esc(d.direction)}</div>
+      <div class="mt">${esc(d.date)} ${esc(d.time)} · ${esc(d.session)}${d.model?" · "+esc(d.model):""}</div>
+    </div>
+    ${d.grade&&d.grade!=="—"?`<span class="tag">${esc(d.grade)}</span>`:""}
   </div>
-  ${r!=null?`<div class="metrics" style="grid-template-columns:1fr 1fr;margin-bottom:20px">
-    <div class="metric"><div class="k">Result</div><div class="v s ${tone(r)}">${asR(r)}</div></div>
-    <div class="metric"><div class="k">P&amp;L</div><div class="v s ${tone(r)}">${money(pnlOf(d))}</div></div>
+
+  ${d.chartBefore?`<img class="shot" data-shot="${esc(d.chartBefore)}" alt="Chart at entry">
+    <p class="hint" style="margin-top:8px">The chart as you saw it going in.</p>`:""}
+
+  ${(d.entryReason||d.slReason||d.tpReason||d.mentalNotes)?`
+  <hr class="rule">
+  <div class="sec-t">What you wrote at entry</div>
+  <div class="said">
+    ${d.entryReason?`<p><b>Entry</b> ${esc(d.entryReason)}</p>`:""}
+    ${d.slReason?`<p><b>Stop</b> ${esc(d.slReason)}</p>`:""}
+    ${d.tpReason?`<p><b>Target</b> ${esc(d.tpReason)}</p>`:""}
+    ${d.mentalNotes?`<p><b>Head</b> ${esc(d.mentalNotes)}</p>`:""}
+    <p><b>Confidence</b> ${esc(d.confidence)}/5</p>
   </div>`:""}
-  <label class="check" style="border-top:0">
+
+  <hr class="rule">
+  <div class="sec-t">How did it close?</div>
+  <div class="chips res">${RESULTS.map(x=>
+    `<button class="chip ${x.k.toLowerCase()}" data-result="${x.k}" aria-pressed="${d.result===x.k}">${x.label}</button>`).join("")}</div>
+
+  ${d.result==="TP"?`
+  <div class="field" style="margin-top:20px"><span class="lab">How many percent?</span>
+    <input class="n" inputmode="decimal" data-d="resultPct" value="${esc(d.resultPct??"")}" placeholder="e.g. 2.5">
+    <span class="why">Of the account. ${d.riskUsd?`You risked ${money(d.riskUsd)}.`:""}</span></div>`:""}
+
+  ${d.result?`<div class="metrics" style="grid-template-columns:repeat(3,1fr);margin-top:20px">
+    <div class="metric"><div class="k">R</div><div class="v s ${tone(r)}">${asR(r)}</div></div>
+    <div class="metric"><div class="k">P&amp;L</div><div class="v s ${tone(r)}">${money(pnl)}</div></div>
+    <div class="metric"><div class="k">Account</div><div class="v s ${tone(pct)}">${asPct(pct)}</div></div>
+  </div>
+  ${d.result==="SL"?`<p class="hint" style="margin-top:12px">A full stop-out on a
+    ${d.grade||"—"} setup: −1R, which was ${money(Math.abs(num(d.riskUsd)||0))}.</p>`:""}`:""}
+
+  <hr class="rule">
+  <div class="sec-t">Chart after</div>
+  ${d.chartAfter
+    ? `<img class="shot" data-shot="${esc(d.chartAfter)}" alt="Chart at exit">
+       <button class="link" style="margin-top:10px" data-act="rmshot" data-which="chartAfter">Replace</button>`
+    : `<label class="drop"><input type="file" accept="image/*" data-shot="chartAfter">
+        <span>Add the aftermath</span><span class="sm">How it actually played out</span></label>`}
+
+  <hr class="rule">
+  <label class="check" style="border-top:0;padding-top:0">
     <input type="checkbox" data-dbool="followedPlan" ${d.followedPlan?"checked":""}>
     <span class="q">I followed the plan</span></label>
   <div class="field" style="margin-top:22px"><span class="lab">What went wrong</span>
     <div class="chips">${MISTAKES.map(x=>
       `<button class="chip" data-mis="${esc(x)}" aria-pressed="${(d.mistakes||[]).includes(x)}">${esc(x)}</button>`).join("")}</div></div>
-  <div class="field"><span class="lab">Review notes</span>
-    <textarea data-d="reviewNotes" placeholder="What actually happened, and what you'd do differently.">${esc(d.reviewNotes)}</textarea></div>`:""}
+  <div class="field"><span class="lab">What to watch better next time</span>
+    <textarea data-d="reviewNotes" placeholder="What actually happened, and the one thing you'd do differently.">${esc(d.reviewNotes||"")}</textarea></div>
 
   <div class="btnrow">
-    <button class="btn pri" data-act="savetrade">${editing?"Save":"Log it"}</button>
-    ${editing?`<button class="btn del" data-act="deltrade" style="flex:0 0 auto;width:auto;padding-inline:22px">Delete</button>`:""}
+    <button class="btn pri" data-act="savereview">Save write-up</button>
   </div>`;
 }
 
@@ -971,6 +1113,8 @@ function render(){
     : S.screen==="models"    ? screenModels()
     : S.screen==="modeledit" ? screenModelEdit()
     : S.screen==="trade"     ? screenTrade()
+    : S.screen==="eod"       ? screenEod()
+    : S.screen==="review"    ? screenReview()
     : S.screen==="intake"    ? screenIntake()
     : screenSettings();
 
@@ -989,6 +1133,7 @@ const newDraft = (mode="now", over={}) => ({
   pair:"XAUUSD", direction:"Long",
   model:S.models[0]?.name||"", confluences:[], confidence:3, liqBuildup:false,
   entry:"", sl:"", tp:"", exit:"", pnl:"", lots:"",
+  checks:[], result:null, resultPct:null, mentalNotes:"",
   mentalBefore:"Calm", followedPlan:true, mistakes:[],
   entryReason:"", slReason:"", tpReason:"", reviewNotes:"",
   chartBefore:null, chartAfter:null, hypothetical:false, ...over,
@@ -1005,8 +1150,24 @@ document.addEventListener("submit", async e=>{
 });
 
 document.addEventListener("click", async e=>{
-  const t=e.target.closest("[data-go],[data-map],[data-act],[data-set],[data-tick],[data-mis],[data-trade],[data-model],[data-period],[data-dash]");
+  const t=e.target.closest("[data-go],[data-map],[data-act],[data-set],[data-tick],[data-gate],[data-result],[data-preset],[data-mis],[data-trade],[data-model],[data-period],[data-dash]");
   if(!t) return;
+
+  if(t.dataset.preset){
+    const p=PRESETS[+t.dataset.preset];
+    S.draft={...S.draft, ...p, confluences:[...p.confluences], tests:[...p.tests]};
+    S.keepScroll=true; render(); toast("Filled in — edit anything that isn't right"); return;
+  }
+  if(t.dataset.gate){
+    const g=t.dataset.gate, arr=S.draft.checks||[];
+    S.draft.checks = arr.includes(g) ? arr.filter(x=>x!==g) : [...arr,g];
+    S.keepScroll=true; render(); return;
+  }
+  if(t.dataset.result){
+    S.draft.result = S.draft.result===t.dataset.result ? null : t.dataset.result;
+    if(S.draft.result!=="TP") S.draft.resultPct=null;
+    S.keepScroll=true; render(); return;
+  }
 
   if(t.dataset.period){ S.period=t.dataset.period; S.keepScroll=true; render(); return; }
   if(t.dataset.dash){ S.dash=t.dataset.dash; render(); return; }
@@ -1024,6 +1185,7 @@ document.addEventListener("click", async e=>{
 
   if(t.dataset.trade){
     const tr=S.trades.find(x=>x.id===t.dataset.trade); if(!tr) return;
+    if(S.screen==="eod"){ S.draft={...tr}; go("review"); return; }
     if(S.screen==="intake"){
       const I=S.intake;
       S.draft={...tr, pnl:I.pnl, lots:I.lots??tr.lots,
@@ -1066,10 +1228,6 @@ document.addEventListener("click", async e=>{
       break;
     }
     case "signout": await sb.auth.signOut(); S.user=null; S.trades=[]; S.models=[]; render(); break;
-    case "preset":
-      S.draft={...S.draft, ...PRESET,
-        confluences:[...PRESET.confluences], tests:[...PRESET.tests]};
-      S.keepScroll=true; render(); toast("Filled in — edit anything that isn't right"); break;
     case "liq":
       S.draft.liqBuildup=!S.draft.liqBuildup; S.keepScroll=true; render(); break;
     case "paste": await pasteCTrader(); break;
@@ -1094,6 +1252,17 @@ document.addEventListener("click", async e=>{
       S.busy=true; t.textContent="Saving…";
       try{ await saveTrade(body); S.draft=null; go("home"); toast("Logged"); }
       catch(_){ t.textContent="Log it"; }
+      finally{ S.busy=false; }
+      break;
+    }
+    case "savereview": {
+      if(S.busy) break;
+      const d=S.draft;
+      if(!d.result) return toast("Pick TP, BE or SL first");
+      if(d.result==="TP" && num(d.resultPct)==null) return toast("How many percent was it?");
+      S.busy=true; t.textContent="Saving…";
+      try{ await saveTrade({...d, pnl:pnlFromResult(d)}); S.draft=null; go("eod"); toast("Written up"); }
+      catch(_){ t.textContent="Save write-up"; }
       finally{ S.busy=false; }
       break;
     }
@@ -1131,7 +1300,7 @@ document.addEventListener("input", e=>{
       const s=sessionFromFields(d.date,d.time);
       if(s && s!==d.session){ d.session=s; S.keepScroll=true; render(); return; }
     }
-    if(["entry","sl","tp","pnl","exit"].includes(el.dataset.d)){
+    if(["entry","sl","tp","pnl","exit","resultPct"].includes(el.dataset.d)){
       const k=el.dataset.d, pos=el.selectionStart;
       S.keepScroll=true; render();
       const again=document.querySelector(`[data-d="${k}"]`);
