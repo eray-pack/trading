@@ -12,10 +12,13 @@
   --tx-2:#8D9CB8;
   --tx-3:#5B6987;
 
+  /* Brand blue stays the accent. Win/loss/flat are semantic and never borrow it,
+     so blue never has to mean both "tap this" and "you made money". */
   --blue:#2962FF;
   --blue-lift:#5B8CFF;
-  --up:#5B9BFF;
+  --up:#3ECF8E;
   --down:#FF6B7A;
+  --flat:#6B7A99;
   --amber:#E9B44C;
 
   --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
@@ -155,12 +158,26 @@ p{margin:0}
 .tile.go .c{color:rgba(255,255,255,.7)}
 .tile:disabled{opacity:.34;cursor:not-allowed}
 .tile:focus-visible{outline:2px solid var(--blue-lift);outline-offset:2px}
-.tiles+.tiles{margin-top:11px}
-.tiles.one{grid-template-columns:1fr}
-.tile.wide{min-height:0;flex-direction:row;align-items:center;gap:14px;padding:17px 18px}
-.tile.wide .t{margin-top:0;flex:1}
-.tile.eod{background:var(--raise-2)}
-.tile.eod svg{stroke:var(--tx-2)}
+/* ---------- stacked pills ---------- */
+.pills{display:flex;flex-direction:column;gap:10px;margin-top:11px}
+.pill{
+  appearance:none;border:0;cursor:pointer;text-align:left;width:100%;
+  background:var(--raise);color:var(--tx);border-radius:var(--r);
+  padding:19px 20px;display:flex;align-items:center;gap:15px;
+}
+.pill:active{background:var(--raise-2)}
+.pill:focus-visible{outline:2px solid var(--blue-lift);outline-offset:2px}
+.pill svg{width:23px;height:23px;stroke:var(--blue-lift);fill:none;stroke-width:1.6;flex:0 0 auto}
+.pill .t{flex:1;font-size:1.06rem;font-weight:600;letter-spacing:-.015em}
+.pill .c{font-size:.83rem;color:var(--tx-3);text-align:right}
+.pill.go{background:var(--blue)}
+.pill.go svg{stroke:#fff}
+.pill.go .c{color:rgba(255,255,255,.72)}
+.pill:disabled{opacity:.38;cursor:not-allowed}
+.pills.small{margin-top:10px}
+.pills.small .pill{padding:14px 20px;background:none;border:1px solid var(--hair)}
+.pills.small .pill .t{font-size:.94rem;font-weight:500;color:var(--tx-2)}
+.pills.small .pill svg{width:19px;height:19px;stroke:var(--tx-3)}
 
 /* ---------- confluence rows ---------- */
 .conflist{display:flex;flex-direction:column;gap:9px}
@@ -302,6 +319,11 @@ select{
 .bars{display:flex;gap:6px;margin-top:11px}
 .bars i{flex:1;height:4px;border-radius:2px;background:var(--hair-2)}
 .bars i.on{background:var(--blue-lift)}
+
+/* ---------- stat rings ---------- */
+.rings{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.donut svg{width:100%;height:auto;display:block}
+@media (max-width:360px){ .rings{gap:4px} }
 
 /* ---------- stats ---------- */
 .metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:20px 14px}

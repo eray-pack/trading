@@ -183,23 +183,6 @@ function toast(msg){
 }
 
 /** R multiple. Broker P&L wins whenever it exists — it's what actually hit the account. */
-function rOf(t){
-  const risk=num(t.riskUsd);
-  if(t.result==="SL") return -1;
-  if(t.result==="BE") return 0;
-  const pnl = t.result==="TP" ? pnlFromResult(t) : num(t.pnl);
-  if(pnl!=null && risk) return pnl/risk;
-  const e=num(t.entry), s=num(t.sl), x=num(t.exit);
-  if(e==null||s==null||x==null) return null;
-  const d=Math.abs(e-s); if(!d) return null;
-  return t.direction==="Short" ? (e-x)/d : (x-e)/d;
-}
-function pnlOf(t){
-  if(t.result){ const p=pnlFromResult(t); if(p!=null) return p; }
-  const p=num(t.pnl); if(p!=null) return p;
-  const r=rOf(t), risk=num(t.riskUsd);
-  return (r!=null && risk) ? r*risk : null;
-}
 function plannedRR(t){
   const e=num(t.entry), s=num(t.sl), p=num(t.tp);
   if(e==null||s==null||p==null) return null;
@@ -215,18 +198,25 @@ function slPips(pair,entry,sl){
   const e=num(entry), s=num(sl);
   return (e==null||s==null) ? null : Math.abs(e-s)/inst(pair).pip;
 }
-/* TP/SL/BE is the end-of-day input; everything numeric follows from it.
-   SL logs a full −1R — the whole amount that was at risk — rather than a flat −1%,
-   because a C setup only ever had 0.25% on the table. */
-function pnlFromResult(t){
-  const risk = num(t.riskUsd) || 0;
-  if(t.result==="SL") return -risk;
+/* Everything downstream of a trade is expressed as a percentage of the account.
+   TP/SL/BE is the only input; R falls out of it as result% ÷ risk%, so no currency
+   ever enters the chain. SL is a full −1R — the whole amount that was at risk —
+   rather than a flat −1%, because a C setup only ever had 0.25% on the table. */
+function pctOf(t){
+  const rp = num(t.riskPct);
+  if(t.result==="SL") return rp==null ? null : -rp;
   if(t.result==="BE") return 0;
-  if(t.result==="TP"){
-    const pct = num(t.resultPct);
-    return pct==null ? null : (num(S.account.size)||0) * pct/100;
-  }
+  if(t.result==="TP") return num(t.resultPct);
+  // Trades closed before results existed, or imported from cTrader.
+  const pnl = num(t.pnl), size = num(S.account.size);
+  if(pnl!=null && size) return pnl/size*100;
   return null;
+}
+function rOf(t){
+  if(t.result==="SL") return -1;
+  if(t.result==="BE") return 0;
+  const p = pctOf(t), rp = num(t.riskPct);
+  return (p!=null && rp) ? p/rp : null;
 }
 
 const isOpen = t => t.result==null && num(t.pnl)==null && (t.exit==null || t.exit==="");
@@ -237,8 +227,9 @@ function outcomeOf(t){
 }
 const closedTrades = () => S.trades.filter(t=>!isOpen(t) && !t.hypothetical);
 const openTrades   = () => S.trades.filter(isOpen);
-/* Anything still missing a result, or closed but never reviewed. */
-const needsWriteup = () => S.trades.filter(t => isOpen(t) || !t.reviewNotes);
+/* EOD owns exactly one queue: trades with no result yet. Saving a result
+   moves the trade out of EOD and into All trades. */
+const needsWriteup = () => S.trades.filter(t => !t.result);
 
 function weekStart(s){
   const d=new Date(s+"T00:00:00");
@@ -259,17 +250,16 @@ function guard(){
   const done=todays.filter(x=>!isOpen(x));
 
   const rToday=done.reduce((s,x)=>s+(rOf(x)??0),0);
-  const pnlToday=done.reduce((s,x)=>s+(pnlOf(x)??0),0);
-  const pctToday=acct ? pnlToday/acct*100 : 0;
+  const pctToday=done.reduce((s,x)=>s+(pctOf(x)??0),0);
 
   const wk=closedTrades().filter(x=>weekStart(x.date||t)===weekStart(t));
-  const pctWeek=acct ? wk.reduce((s,x)=>s+(pnlOf(x)??0),0)/acct*100 : 0;
+  const pctWeek=wk.reduce((s,x)=>s+(pctOf(x)??0),0);
 
   const seq=[...closedTrades()].sort((x,y)=>(y.date+y.time).localeCompare(x.date+x.time));
   let streak=0; for(const x of seq){ if(outcomeOf(x)==="Loss") streak++; else break; }
 
   const byDay={};
-  for(const x of closedTrades()) byDay[x.date]=(byDay[x.date]??0)+(pnlOf(x)??0);
+  for(const x of closedTrades()) byDay[x.date]=(byDay[x.date]??0)+(pctOf(x)??0);
   let redDays=0;
   for(const d of Object.keys(byDay).sort().reverse()){ if(byDay[d]<0) redDays++; else break; }
 
@@ -282,14 +272,16 @@ function guard(){
   if(redDays>=3) warns.push(`${redDays} red days running. Take a day off, then C size only until a green day.`);
   if(a.greenLock && done.length===1 && rToday>=2) warns.push(`Trade 1 closed ${asR(rToday)}. Green-lock says stop here.`);
 
-  return {blocks,warns,todays,done,rToday,pnlToday,pctToday,pctWeek,streak,acct};
+  return {blocks,warns,todays,done,rToday,pctToday,pctWeek,streak,acct};
 }
 
 function periodStats(period){
-  const acct=num(S.account.size)||0;
   const ts=closedTrades().filter(t=>inPeriod(t.date,period));
-  const pnl=ts.reduce((s,t)=>s+(pnlOf(t)??0),0);
-  return {pct:acct?pnl/acct*100:0, pnl, r:ts.reduce((s,t)=>s+(rOf(t)??0),0), count:ts.length};
+  return {
+    pct:ts.reduce((s,t)=>s+(pctOf(t)??0),0),
+    r:ts.reduce((s,t)=>s+(rOf(t)??0),0),
+    count:ts.length,
+  };
 }
 
 /* ========================= data ========================= */
@@ -484,6 +476,7 @@ const PATHS = {
   chart:'<path d="M4 19V11M10 19V5M16 19v-8M22 19H2"/>',
   model:'<path d="M3 17l5-5 4 3 8-8"/><path d="M14 7h6v6"/>',
   moon:'<path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/>',
+  list:'<path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>',
   back:'<path d="M15 18l-6-6 6-6"/>',
   gear:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/>',
 };
@@ -533,36 +526,39 @@ function screenHome(){
         `<button data-period="${k}" aria-pressed="${S.period===k}">${l}</button>`).join("")}
     </div>
     <div class="big ${tone(P.pct)}">${asPct(P.pct)}</div>
-    <div class="herosub"><span class="num">${asR(P.r)}</span> · <span class="num">${money(P.pnl)}</span> · ${P.count} ${P.count===1?"trade":"trades"}</div>
+    <div class="herosub"><span class="num">${asR(P.r)}</span> · ${P.count} ${P.count===1?"trade":"trades"}</div>
   </div>
 
   ${status}
 
-  <div class="tiles">
-    <button class="tile go" data-map="now" ${blocked?"disabled":""}>
+  <div class="pills">
+    <button class="pill go" data-map="now" ${blocked?"disabled":""}>
       ${ic("plus")}<span class="t">Now</span>
-      <span class="c">${blocked?"blocked":`${sessionFor(new Date())} · live`}</span>
+      <span class="c">${blocked?"blocked by your rules":`${sessionFor(new Date())} session`}</span>
     </button>
-    <button class="tile eod" data-go="eod">
+    <button class="pill" data-go="eod">
       ${ic("moon")}<span class="t">EOD</span>
       <span class="c">${(()=>{const n=needsWriteup().length;
         return n?`${n} to write up`:"all written up";})()}</span>
     </button>
-  </div>
-  <div class="tiles">
-    <button class="tile" data-go="checklist">
-      ${ic("check")}<span class="t">Checklist</span>
-      <span class="c">${ck}/${CHECK_ITEMS.length} today</span>
+    <button class="pill" data-go="alltrades">
+      ${ic("list")}<span class="t">All trades</span>
+      <span class="c">${S.trades.length} logged</span>
     </button>
-    <button class="tile" data-go="dashboard">
-      ${ic("chart")}<span class="t">Dashboard</span>
+    <button class="pill" data-go="dashboard">
+      ${ic("chart")}<span class="t">Stats</span>
       <span class="c">${closedTrades().length} closed</span>
     </button>
   </div>
-  <div class="tiles one">
-    <button class="tile wide" data-go="models">
+
+  <div class="pills small">
+    <button class="pill" data-go="checklist">
+      ${ic("check")}<span class="t">Checklist</span>
+      <span class="c">${ck}/${CHECK_ITEMS.length}</span>
+    </button>
+    <button class="pill" data-go="models">
       ${ic("model")}<span class="t">Entry models</span>
-      <span class="c">${S.models.length} defined</span>
+      <span class="c">${S.models.length}</span>
     </button>
   </div>
 
@@ -579,9 +575,11 @@ function screenHome(){
   </div>`:""}`;
 }
 
+/* Green won, red lost, grey broke even, blue is still running. */
 function tradeItem(t){
-  const o=outcomeOf(t), r=rOf(t);
-  const c = o==="Win"?"var(--up)" : o==="Loss"?"var(--down)" : o==="BE"?"var(--tx-3)" : "var(--blue)";
+  const o=outcomeOf(t), pct=pctOf(t);
+  const c = o==="Win"?"var(--up)" : o==="Loss"?"var(--down)"
+          : o==="BE"?"var(--flat)" : "var(--blue)";
   return `<button class="item" data-trade="${esc(t.id)}">
     <span class="bar" style="background:${c}"></span>
     <span class="main">
@@ -590,7 +588,9 @@ function tradeItem(t){
       ${t.grade&&t.grade!=="—"?`<span class="tag" style="margin-left:4px">${esc(t.grade)}</span>`:""}
       <span class="mt">${esc(t.date||"")} ${esc(t.time||"")}${t.session?" · "+esc(t.session):""}${t.model?" · "+esc(t.model):""}</span>
     </span>
-    <span class="val ${tone(r)}">${o==="Open"?`<span class="tag open">OPEN</span>`:asR(r)}</span>
+    <span class="val ${tone(pct)}">${o==="Open"
+      ? `<span class="tag open">OPEN</span>`
+      : `${asPct(pct)}`}</span>
   </button>`;
 }
 
@@ -632,12 +632,53 @@ function screenChecklist(){
 
 /* ---------- dashboard ---------- */
 function screenDashboard(){
-  return `${head("Dashboard")}
+  return `${head("Stats")}
   <div class="seg" style="margin:6px 0 26px">
     <button data-dash="stats"  aria-pressed="${S.dash==="stats"}">Stats</button>
-    <button data-dash="trades" aria-pressed="${S.dash==="trades"}">Trades</button>
+    <button data-dash="trades" aria-pressed="${S.dash==="trades"}">All trades</button>
   </div>
   ${S.dash==="stats" ? statsBody() : tradesBody()}`;
+}
+
+/* A ring, its arc scaled to `frac` of a full turn, with a label in the middle.
+   Kept as one SVG per stat so each reads on its own rather than as a chart. */
+function donut(frac, color, big, small){
+  const R=52, C=2*Math.PI*R, f=Math.max(0,Math.min(1,frac||0));
+  return `<div class="donut">
+    <svg viewBox="0 0 128 128" role="img" aria-label="${esc(small)}: ${esc(big)}">
+      <circle cx="64" cy="64" r="${R}" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="11"/>
+      <circle cx="64" cy="64" r="${R}" fill="none" stroke="${color}" stroke-width="11"
+        stroke-linecap="round" stroke-dasharray="${(C*f).toFixed(1)} ${C.toFixed(1)}"
+        transform="rotate(-90 64 64)"/>
+      <text x="64" y="62" text-anchor="middle" fill="var(--tx)"
+        font-family="IBM Plex Mono, monospace" font-size="21" font-weight="500">${esc(big)}</text>
+      <text x="64" y="81" text-anchor="middle" fill="var(--tx-3)"
+        font-family="IBM Plex Sans, sans-serif" font-size="11">${esc(small)}</text>
+    </svg>
+  </div>`;
+}
+
+function statsRings(cl){
+  const a=S.account;
+  const wins=cl.filter(t=>outcomeOf(t)==="Win").length;
+  const decided=cl.filter(t=>outcomeOf(t)!=="BE").length;
+  const wr=decided?wins/decided*100:0;
+
+  const byPair={};
+  for(const t of cl) byPair[t.pair||"—"]=(byPair[t.pair||"—"]??0)+1;
+  const top=Object.entries(byPair).sort((x,y)=>y[1]-x[1])[0];
+  const share=top?top[1]/cl.length*100:0;
+
+  const total=cl.reduce((s,t)=>s+(pctOf(t)??0),0);
+  // Scale the ring against the target when up, against the max drawdown when down.
+  const scale = total>=0 ? (num(a.targetPct)||10) : (num(a.maxDDPct)||10);
+  const frac = Math.min(1, Math.abs(total)/scale);
+
+  return `<div class="rings">
+    ${donut(wr/100, "var(--up)", fx(wr,0)+"%", "win rate")}
+    ${donut(share/100, "var(--blue-lift)", fx(share,0)+"%", top?top[0]:"—")}
+    ${donut(frac, total>=0?"var(--up)":"var(--down)", asPct(total), total>=0?"of target":"of max DD")}
+  </div>`;
 }
 
 function statsBody(){
@@ -649,10 +690,13 @@ function statsBody(){
 
   const rs=cl.map(rOf).filter(v=>v!=null);
   const wins=rs.filter(r=>r>0.02), losses=rs.filter(r=>r<-0.02);
+  // Breakevens are neither won nor lost — they belong in neither half of the ratio.
+  const decided=wins.length+losses.length;
   const avgW=wins.length?wins.reduce((a,b)=>a+b,0)/wins.length:0;
   const avgL=losses.length?losses.reduce((a,b)=>a+b,0)/losses.length:0;
   const exp=rs.length?rs.reduce((a,b)=>a+b,0)/rs.length:0;
   const tot=rs.reduce((a,b)=>a+b,0);
+  const totPct=cl.reduce((s,t)=>s+(pctOf(t)??0),0);
   let peak=0,cum=0,mdd=0;
   for(const r of [...cl].sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).map(rOf)){
     if(r==null) continue; cum+=r; peak=Math.max(peak,cum); mdd=Math.min(mdd,cum-peak);
@@ -675,21 +719,22 @@ function statsBody(){
   };
 
   return `
-  <div class="metrics">
+  ${statsRings(cl)}
+  <div class="metrics" style="margin-top:34px">
     <div class="metric"><div class="k">Expectancy</div>
       <div class="v ${tone(exp)}">${asR(exp)}</div><div class="x">per trade</div></div>
     <div class="metric"><div class="k">Win rate</div>
-      <div class="v">${fx(rs.length?wins.length/rs.length*100:0,0)}%</div>
+      <div class="v">${fx(decided?wins.length/decided*100:0,0)}%</div>
       <div class="x">${wins.length}W ${losses.length}L</div></div>
     <div class="metric"><div class="k">Total</div>
-      <div class="v ${tone(tot)}">${asR(tot)}</div><div class="x">DD ${asR(mdd)}</div></div>
+      <div class="v ${tone(totPct)}">${asPct(totPct)}</div><div class="x">DD ${asR(mdd)}</div></div>
     <div class="metric"><div class="k">Avg win</div><div class="v s up">${asR(avgW)}</div></div>
     <div class="metric"><div class="k">Avg loss</div><div class="v s down">${asR(avgL)}</div></div>
     <div class="metric"><div class="k">Payoff</div>
       <div class="v s">${avgL?fx(Math.abs(avgW/avgL),2):"—"}</div></div>
   </div>
 
-  <div class="sec"><div class="sec-t">Equity curve — R</div>${curve(cl)}</div>
+  <div class="sec"><div class="sec-t">Equity curve</div>${curve(cl)}</div>
 
   ${(fp.length&&nf.length)?`<div class="sec">
     <div class="sec-t">Does following the plan pay?</div>
@@ -705,7 +750,7 @@ function statsBody(){
 }
 
 function curve(cl){
-  const pts=[...cl].sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).map(rOf).filter(v=>v!=null);
+  const pts=[...cl].sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).map(pctOf).filter(v=>v!=null);
   if(pts.length<2) return `<p class="hint">Needs two closed trades.</p>`;
   const cum=[0]; pts.forEach(r=>cum.push(cum[cum.length-1]+r));
   const W=600,H=190,L=40,R=8,T=12,B=20;
@@ -716,9 +761,9 @@ function curve(cl){
   const line=cum.map((v,i)=>`${i?"L":"M"}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(" ");
   const base=Y(Math.max(yMin,Math.min(0,yMax)));
   const area=`${line} L${X(cum.length-1).toFixed(1)},${base.toFixed(1)} L${X(0).toFixed(1)},${base.toFixed(1)} Z`;
-  const c=cum[cum.length-1]>=0?"#5B9BFF":"#FF6B7A";
+  const c=cum[cum.length-1]>=0?"#3ECF8E":"#FF6B7A";
   return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block"
-    role="img" aria-label="Cumulative R across ${pts.length} closed trades, ending ${asR(cum[cum.length-1])}">
+    role="img" aria-label="Cumulative account percentage across ${pts.length} closed trades, ending ${asPct(cum[cum.length-1])}">
     ${[yMax,(yMax+yMin)/2,yMin].map(v=>`
       <line x1="${L}" y1="${Y(v).toFixed(1)}" x2="${W-R}" y2="${Y(v).toFixed(1)}" stroke="rgba(255,255,255,.07)" stroke-width="1"/>
       <text x="${L-7}" y="${(Y(v)+3.5).toFixed(1)}" text-anchor="end" fill="#5B6987"
@@ -737,9 +782,9 @@ function tradesBody(){
     <p class="hint">Map one from the home screen.</p></div>`;
   const g={}; for(const t of list) (g[t.date]??=[]).push(t);
   return Object.entries(g).map(([d,ts])=>{
-    const r=ts.filter(t=>!isOpen(t)).reduce((s,t)=>s+(rOf(t)??0),0);
+    const r=ts.filter(t=>!isOpen(t)).reduce((s,t)=>s+(pctOf(t)??0),0);
     return `<div class="sec" style="margin-top:26px">
-      <div class="rowb sec-t"><span>${esc(d)}</span><span class="num ${tone(r)}">${asR(r)}</span></div>
+      <div class="rowb sec-t"><span>${esc(d)}</span><span class="num ${tone(r)}">${asPct(r)}</span></div>
       <div class="list">${ts.map(tradeItem).join("")}</div></div>`;
   }).join("");
 }
@@ -889,7 +934,7 @@ function screenTrade(){
     <span class="glyph ${G.cls}">${G.g}</span>
     <div style="flex:1;min-width:0">
       <div class="rowb"><span class="hint">Risk</span>
-        <span class="num">${G.risk?`${fx(G.risk,2)}% · ${money(riskUsd)}`:"—"}</span></div>
+        <span class="num">${G.risk?`${fx(G.risk,2)}%`:"—"}</span></div>
       <div class="bars">${[0,1,2,3].map(i=>`<i class="${i<ticked?"on":""}"></i>`).join("")}</div>
       <p class="hint" style="margin-top:10px">${G.note}</p>
     </div>
@@ -948,28 +993,41 @@ function screenTrade(){
 /* ---------- EOD: pick a trade, then write it up ---------- */
 
 function screenEod(){
-  const pending=needsWriteup();
-  const done=S.trades.filter(t=>!needsWriteup().includes(t));
+  const pending=[...needsWriteup()].sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
   return `${head("End of day")}
-  <p class="hint" style="margin-bottom:22px">Pick the trade you want to write up. You'll see the
-  chart and the thesis exactly as you left them at entry.</p>
   ${pending.length
-    ? `<div class="sec-t">Waiting on you</div><div class="list">${pending.map(tradeItem).join("")}</div>`
+    ? `<p class="hint" style="margin-bottom:22px">Pick one. You'll see the chart and the thesis
+       exactly as you left them at entry.</p>
+       <div class="list">${pending.map(tradeItem).join("")}</div>`
     : `<div class="blank"><h3>Nothing waiting</h3>
-       <p class="hint">Every trade has a result and a review.</p></div>`}
-  ${done.length?`<div class="sec">
-    <div class="sec-t">Already written up</div>
-    <div class="list">${done.slice(0,10).map(tradeItem).join("")}</div>
-  </div>`:""}`;
+       <p class="hint">Every trade has a result. They're all in All trades.</p></div>`}`;
+}
+
+function screenAllTrades(){
+  const list=[...S.trades].sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
+  if(!list.length) return `${head("All trades")}<div class="blank"><h3>Nothing logged yet</h3>
+    <p class="hint">Map your first trade from the home screen.</p></div>`;
+  const byDay={};
+  for(const t of list) (byDay[t.date]??=[]).push(t);
+  const total=list.reduce((s,t)=>s+(pctOf(t)??0),0);
+  return `${head("All trades")}
+  <div class="rowb" style="margin-bottom:22px">
+    <span class="hint">${list.length} trades, lifetime</span>
+    <span class="num ${tone(total)}" style="font-size:1.05rem">${asPct(total)}</span>
+  </div>
+  ${Object.entries(byDay).map(([d,ts])=>{
+    const p=ts.reduce((s,t)=>s+(pctOf(t)??0),0);
+    return `<div class="sec" style="margin-top:24px">
+      <div class="rowb sec-t"><span>${esc(d)}</span><span class="num ${tone(p)}">${asPct(p)}</span></div>
+      <div class="list">${ts.map(tradeItem).join("")}</div></div>`;
+  }).join("")}`;
 }
 
 function screenReview(){
   const d=S.draft;
-  const r=rOf(d), pnl=pnlOf(d);
-  const acct=num(S.account.size)||0;
-  const pct=acct&&pnl!=null ? pnl/acct*100 : null;
+  const r=rOf(d), pct=pctOf(d);
 
-  return `${head("Write it up","eod")}
+  return `${head("Write it up", S.reviewFrom||"eod")}
 
   <div class="rowb" style="margin-bottom:18px">
     <div>
@@ -1001,15 +1059,14 @@ function screenReview(){
   ${d.result==="TP"?`
   <div class="field" style="margin-top:20px"><span class="lab">How many percent?</span>
     <input class="n" inputmode="decimal" data-d="resultPct" value="${esc(d.resultPct??"")}" placeholder="e.g. 2.5">
-    <span class="why">Of the account. ${d.riskUsd?`You risked ${money(d.riskUsd)}.`:""}</span></div>`:""}
+    <span class="why">Of the account. ${d.riskPct?`You risked ${fx(d.riskPct,2)}%.`:""}</span></div>`:""}
 
-  ${d.result?`<div class="metrics" style="grid-template-columns:repeat(3,1fr);margin-top:20px">
-    <div class="metric"><div class="k">R</div><div class="v s ${tone(r)}">${asR(r)}</div></div>
-    <div class="metric"><div class="k">P&amp;L</div><div class="v s ${tone(r)}">${money(pnl)}</div></div>
+  ${d.result?`<div class="metrics" style="grid-template-columns:1fr 1fr;margin-top:20px">
     <div class="metric"><div class="k">Account</div><div class="v s ${tone(pct)}">${asPct(pct)}</div></div>
+    <div class="metric"><div class="k">R</div><div class="v s ${tone(r)}">${asR(r)}</div></div>
   </div>
   ${d.result==="SL"?`<p class="hint" style="margin-top:12px">A full stop-out on a
-    ${d.grade||"—"} setup: −1R, which was ${money(Math.abs(num(d.riskUsd)||0))}.</p>`:""}`:""}
+    ${d.grade||"—"} setup: −1R, which was ${fx(num(d.riskPct)||0,2)}% of the account.</p>`:""}`:""}
 
   <hr class="rule">
   <div class="sec-t">Chart after</div>
@@ -1042,7 +1099,8 @@ function screenIntake(){
   return `${head("Close a trade")}
   <div class="metrics" style="margin-bottom:8px">
     <div class="metric"><div class="k">Net P&amp;L</div>
-      <div class="v s ${tone(I.pnl)}">${money(I.pnl)}</div></div>
+      <div class="v s ${tone(I.pnl)}">${(()=>{const sz=num(S.account.size);
+        return sz ? asPct(I.pnl/sz*100) : asR(null);})()}</div></div>
     <div class="metric"><div class="k">Pips</div>
       <div class="v s">${I.pips==null?"—":fx(I.pips,1)}</div></div>
     <div class="metric"><div class="k">Lots</div>
@@ -1114,6 +1172,7 @@ function render(){
     : S.screen==="modeledit" ? screenModelEdit()
     : S.screen==="trade"     ? screenTrade()
     : S.screen==="eod"       ? screenEod()
+    : S.screen==="alltrades" ? screenAllTrades()
     : S.screen==="review"    ? screenReview()
     : S.screen==="intake"    ? screenIntake()
     : screenSettings();
@@ -1185,7 +1244,10 @@ document.addEventListener("click", async e=>{
 
   if(t.dataset.trade){
     const tr=S.trades.find(x=>x.id===t.dataset.trade); if(!tr) return;
-    if(S.screen==="eod"){ S.draft={...tr}; go("review"); return; }
+    if(S.screen==="eod" || S.screen==="alltrades" || S.screen==="dashboard"){
+      S.reviewFrom = S.screen==="dashboard" ? "dashboard" : S.screen;
+      S.draft={...tr}; go("review"); return;
+    }
     if(S.screen==="intake"){
       const I=S.intake;
       S.draft={...tr, pnl:I.pnl, lots:I.lots??tr.lots,
@@ -1261,7 +1323,8 @@ document.addEventListener("click", async e=>{
       if(!d.result) return toast("Pick TP, BE or SL first");
       if(d.result==="TP" && num(d.resultPct)==null) return toast("How many percent was it?");
       S.busy=true; t.textContent="Saving…";
-      try{ await saveTrade({...d, pnl:pnlFromResult(d)}); S.draft=null; go("eod"); toast("Written up"); }
+      try{ await saveTrade({...d, pnl:null}); S.draft=null;
+           go(S.reviewFrom||"eod"); toast("Written up"); }
       catch(_){ t.textContent="Save write-up"; }
       finally{ S.busy=false; }
       break;
