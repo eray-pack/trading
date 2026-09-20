@@ -1,0 +1,16 @@
+{
+  "name": "Confluence",
+  "short_name": "Confluence",
+  "description": "Trading journal — confluences set the size, the rules stop the day.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0D1420",
+  "theme_color": "#0D1420",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
