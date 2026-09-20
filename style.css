@@ -155,6 +155,50 @@ p{margin:0}
 .tile.go .c{color:rgba(255,255,255,.7)}
 .tile:disabled{opacity:.34;cursor:not-allowed}
 .tile:focus-visible{outline:2px solid var(--blue-lift);outline-offset:2px}
+.tiles+.tiles{margin-top:11px}
+.tiles.one{grid-template-columns:1fr}
+.tile.wide{min-height:0;flex-direction:row;align-items:center;gap:14px;padding:17px 18px}
+.tile.wide .t{margin-top:0;flex:1}
+.tile.eod{background:var(--raise-2)}
+.tile.eod svg{stroke:var(--tx-2)}
+
+/* ---------- confluence rows ---------- */
+.conflist{display:flex;flex-direction:column;gap:9px}
+.conf{
+  appearance:none;border:0;cursor:pointer;width:100%;text-align:left;
+  display:flex;align-items:center;gap:13px;
+  background:var(--raise);color:var(--tx-2);
+  border-radius:var(--r-sm);padding:15px 16px;font-family:var(--sans);font-size:.95rem;
+}
+.conf:active{opacity:.75}
+.conf.on{background:rgba(41,98,255,.15);color:var(--tx)}
+.conf:focus-visible{outline:2px solid var(--blue-lift);outline-offset:2px}
+.conf .ctext{flex:1;line-height:1.4}
+.conf .box{
+  width:23px;height:23px;border-radius:7px;flex:0 0 auto;
+  border:1.5px solid var(--hair-2);display:grid;place-items:center;
+}
+.conf.on .box{background:var(--blue);border-color:var(--blue)}
+.conf .box svg{width:14px;height:14px;stroke:#fff;fill:none;stroke-width:3}
+.conf.extra{margin-top:9px;background:none;border:1px dashed var(--hair-2)}
+.conf.extra.on{background:rgba(233,180,76,.12);border-color:transparent;color:var(--tx)}
+.conf.extra.on .box{background:var(--amber);border-color:var(--amber)}
+.tf{
+  font-family:var(--mono);font-size:.68rem;letter-spacing:.03em;
+  color:var(--tx-3);background:var(--bg);border-radius:6px;
+  padding:4px 8px;flex:0 0 auto;min-width:62px;text-align:center;
+}
+.conf.on .tf{color:var(--blue-lift)}
+.conf.extra.on .tf{color:var(--amber)}
+.tfblock{margin-bottom:22px}
+.tfblock .tf{display:inline-block;margin-bottom:9px;background:var(--raise)}
+textarea.test{min-height:64px;font-size:.92rem;color:var(--tx-2)}
+.auto{
+  font-family:var(--mono);font-size:.66rem;letter-spacing:.04em;
+  color:var(--blue-lift);background:rgba(41,98,255,.14);
+  padding:3px 7px;border-radius:5px;margin-left:5px;
+}
+.field .why{display:block;font-size:.78rem;color:var(--tx-3);margin-top:7px}
 
 /* ---------- lists ---------- */
 .list{display:flex;flex-direction:column}

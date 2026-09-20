@@ -39,18 +39,76 @@ const DEFAULT_ACCOUNT = {
   maxTradesDay:2, maxConsecLosses:2, minRR:2, greenLock:true,
 };
 
+/* The four timeframes the entry model is built on, top down. Index-aligned with
+   a model's `confluences` and `tests` arrays. */
+const TIMEFRAMES = ["4H","1H","15/30M","1M entry"];
+
+/* The checklist follows the order the analysis is actually done in: bias before
+   setup, setup before confirmation, confirmation before size. */
 const CHECKLIST = [
-  ["Am I inside my session?","Outside it is a no-trade, however good it looks."],
-  ["Is this one of my mapped entry models?","If you can't name it, you're improvising."],
-  ["Do I have a trade left today?",""],
-  ["Am I inside my daily stop?",""],
-  ["How many confluences are present?","This sets the size. Not your mood."],
-  ["Where is my stop, and why there?","A level, not a dollar amount."],
-  ["Where is my target, and why there?","A liquidity target."],
-  ["Is planned RR above my floor?",""],
-  ["Screenshot taken with levels drawn?","Before entry, not after."],
-  ["What is my mental state, honestly?","FOMO, revenge or tired is a no-trade."],
+  ["Bias — top down", [
+    {id:"ob4h",  q:"4H orderblocks mapped and a bias written down?", why:"Direction first. Before the fib, before anything."},
+    {id:"h1",    q:"Does the 1H agree with the 4H?",                 why:"If the 1H is fighting it, there is no trade."},
+  ]],
+  ["Setup — the zone", [
+    {id:"range", q:"Orderflow range marked, extreme high to extreme low?", why:""},
+    {id:"fib",   q:"Fib drawn — is price inside the 0.786?",         why:"The tap is the invitation, not the entry."},
+    {id:"liq",   q:"Liquidity built up before the zone?",            why:"An extra sweep before the move. If yes, you can target 3R."},
+  ]],
+  ["Confirmation — lower timeframe", [
+    {id:"sweep", q:"15M/5M swept, then broke, with the bias?",       why:"No sweep-and-break, no entry. This one is not negotiable."},
+  ]],
+  ["Execution", [
+    {id:"stop",  q:"Stop sitting on the sweep?",                     why:"A place, not a pip count."},
+    {id:"entry", q:"Entry off the 0.786, far enough from the stop?", why:""},
+    {id:"rr",    q:"Is RR at least 2.5?",                            why:""},
+  ]],
+  ["Gate", [
+    {id:"sess",  q:"Inside my session?",                             why:"Outside it is a no-trade, however good it looks."},
+    {id:"left",  q:"Do I have a trade left today?",                  why:""},
+    {id:"stopd", q:"Am I inside my daily stop?",                     why:""},
+    {id:"shot",  q:"Screenshot taken with levels drawn?",            why:"Before entry, not after."},
+    {id:"mind",  q:"Mental state, honestly?",                        why:"FOMO, revenge or tired is a no-trade."},
+  ]],
 ];
+const CHECK_ITEMS = CHECKLIST.flatMap(([,items]) => items);
+
+/* Eray's process, ready to drop into a new model. Written from his own description,
+   so the wording is his — the two blanks at the end are the ones only he can fill. */
+const PRESET = {
+  name:"Fib 0.786 orderflow reversal",
+  minRR:2.5,
+  sessions:"London, Overlap",
+  pairs:"XAUUSD",
+  confluences:[
+    "Orderblocks mapped, bias decided",
+    "Price in the 0.786 of the orderflow range",
+    "Swept, then broke, with the bias",
+    "Entry off the fib, stop on the sweep",
+  ],
+  tests:[
+    "Important orderblocks drawn and a direction written down before anything else is opened. Zones mark where price is most likely heading.",
+    "The 1H carries the 4H idea through rather than fighting it. Fib pulled from the extreme high to the extreme low of the orderflow range, and price is inside the 0.786.",
+    "Liquidity swept and structure broken back in the direction of the orderflow. 5M counts. A 0.786 tap on its own is not this.",
+    "Fib taken again from the 0.786. Stop sits on the sweep, entry further away from it, 2.5 RR minimum measured off that stop.",
+  ],
+  invalidation:"No sweep-and-break — a 0.786 tap on its own is not an entry. Anything under 2.5 RR. The 1H fighting the 4H bias.",
+  failureMode:"",
+};
+
+/* FX sessions, decided in UTC so the answer doesn't change with the device's clock. */
+function sessionFor(d){
+  const h = d.getUTCHours() + d.getUTCMinutes()/60;
+  if(h >= 7  && h < 12) return "London";
+  if(h >= 12 && h < 16) return "Overlap";
+  if(h >= 16 && h < 21) return "NY";
+  return "Asia";
+}
+function sessionFromFields(date,time){
+  if(!date || !time) return null;
+  const d = new Date(`${date}T${time}`);
+  return isNaN(d) ? null : sessionFor(d);
+}
 
 /* ========================= state ========================= */
 
@@ -186,7 +244,7 @@ const tradeFromRow = r => ({
   mentalBefore:r.mental_before, followedPlan:r.followed_plan, mistakes:r.mistakes||[],
   entryReason:r.entry_reason, slReason:r.sl_reason, tpReason:r.tp_reason,
   reviewNotes:r.review_notes, chartBefore:r.chart_before, chartAfter:r.chart_after,
-  hypothetical:r.hypothetical,
+  hypothetical:r.hypothetical, mappedMode:r.mapped_mode, liqBuildup:r.liq_buildup,
 });
 const tradeToRow = t => ({
   user_id:S.user.id, trade_date:t.date||today(), trade_time:t.time||"",
@@ -199,11 +257,13 @@ const tradeToRow = t => ({
   entry_reason:t.entryReason||"", sl_reason:t.slReason||"", tp_reason:t.tpReason||"",
   review_notes:t.reviewNotes||"", chart_before:t.chartBefore||null,
   chart_after:t.chartAfter||null, hypothetical:!!t.hypothetical,
+  mapped_mode:t.mappedMode||"now", liq_buildup:!!t.liqBuildup,
   updated_at:new Date().toISOString(),
 });
 const modelFromRow = r => ({
   id:r.id, name:r.name, confluences:r.confluences||[], tests:r.tests||[],
-  sessions:r.sessions, pairs:r.pairs, invalidation:r.invalidation, failureMode:r.failure_mode,
+  sessions:r.sessions, pairs:r.pairs, invalidation:r.invalidation,
+  failureMode:r.failure_mode, minRR:r.min_rr==null?null:+r.min_rr,
 });
 const accountFromRow = r => ({
   firm:r.firm, size:+r.size, dailyDDPct:+r.daily_dd_pct, maxDDPct:+r.max_dd_pct,
@@ -253,7 +313,8 @@ async function saveModel(m){
   const row={user_id:S.user.id,name:m.name.trim(),
     confluences:(m.confluences||[]).map(c=>c.trim()).filter(Boolean),
     tests:(m.tests||[]).map(c=>c.trim()), sessions:m.sessions||"", pairs:m.pairs||"",
-    invalidation:m.invalidation||"", failure_mode:m.failureMode||""};
+    invalidation:m.invalidation||"", failure_mode:m.failureMode||"",
+    min_rr:num(m.minRR)};
   const q = m.id
     ? sb.from("models").update(row).eq("id",m.id).select().single()
     : sb.from("models").insert(row).select().single();
@@ -361,6 +422,7 @@ const PATHS = {
   plus:'<path d="M12 5v14M5 12h14"/>',
   chart:'<path d="M4 19V11M10 19V5M16 19v-8M22 19H2"/>',
   model:'<path d="M3 17l5-5 4 3 8-8"/><path d="M14 7h6v6"/>',
+  moon:'<path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/>',
   back:'<path d="M15 18l-6-6 6-6"/>',
   gear:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/>',
 };
@@ -415,19 +477,27 @@ function screenHome(){
   ${status}
 
   <div class="tiles">
-    <button class="tile go" data-go="map" ${blocked?"disabled":""}>
-      ${ic("plus")}<span class="t">Map a trade</span>
-      <span class="c">${blocked?"blocked":"thesis first"}</span>
+    <button class="tile go" data-map="now" ${blocked?"disabled":""}>
+      ${ic("plus")}<span class="t">Now</span>
+      <span class="c">${blocked?"blocked":`${sessionFor(new Date())} · live`}</span>
     </button>
+    <button class="tile eod" data-map="eod" ${blocked?"disabled":""}>
+      ${ic("moon")}<span class="t">EOD</span>
+      <span class="c">${blocked?"blocked":"after the fact"}</span>
+    </button>
+  </div>
+  <div class="tiles">
     <button class="tile" data-go="checklist">
       ${ic("check")}<span class="t">Checklist</span>
-      <span class="c">${ck}/${CHECKLIST.length} today</span>
+      <span class="c">${ck}/${CHECK_ITEMS.length} today</span>
     </button>
     <button class="tile" data-go="dashboard">
       ${ic("chart")}<span class="t">Dashboard</span>
       <span class="c">${closedTrades().length} closed</span>
     </button>
-    <button class="tile" data-go="models">
+  </div>
+  <div class="tiles one">
+    <button class="tile wide" data-go="models">
       ${ic("model")}<span class="t">Entry models</span>
       <span class="c">${S.models.length} defined</span>
     </button>
@@ -465,21 +535,34 @@ function tradeItem(t){
 function screenChecklist(){
   if(S.checkDate!==today()){ S.checks={}; S.checkDate=today(); }
   const a=S.account, G=guard();
-  const dyn={2:`${a.maxTradesDay-G.todays.length} of ${a.maxTradesDay} left`,
-             3:`${fx(G.pctToday,2)}% today, stop at −${a.ownDailyStopPct}%`,
-             7:`your floor is ${a.minRR}:1`};
-  const done=Object.values(S.checks).filter(Boolean).length;
+  const model=S.models[0];
+  const floor=model?.minRR ?? a.minRR;
+  const dyn={
+    left:`${a.maxTradesDay-G.todays.length} of ${a.maxTradesDay} left`,
+    stopd:`${fx(G.pctToday,2)}% today, stop at −${a.ownDailyStopPct}%`,
+    rr:`your floor is ${floor}:1`,
+    sess:`right now that's ${sessionFor(new Date())}`,
+  };
+  const done=CHECK_ITEMS.filter(i=>S.checks[i.id]).length;
+  const blocked=G.blocks.length>0;
+
   return `${head("Checklist")}
-  <p class="hint" style="margin-bottom:26px">Read them out loud. It only works out loud. Resets daily.</p>
-  ${CHECKLIST.map(([q,w],i)=>`
-    <label class="check ${S.checks[i]?"done":""}">
-      <input type="checkbox" data-check="${i}" ${S.checks[i]?"checked":""}>
-      <span class="q">${esc(q)}${(dyn[i]||w)?`<span class="why">${esc(dyn[i]||w)}</span>`:""}</span>
-    </label>`).join("")}
-  <div style="margin-top:28px">
-    ${done===CHECKLIST.length
-      ? `<button class="btn pri" data-go="map">All ten clear — map the trade</button>`
-      : `<p class="hint" style="text-align:center">${CHECKLIST.length-done} still unanswered</p>`}
+  <p class="hint" style="margin-bottom:8px">Read them out loud — it only works out loud.
+  Top down, in the order you actually do it. Resets daily.</p>
+  ${CHECKLIST.map(([group,items])=>`
+    <div class="sec">
+      <div class="sec-t">${esc(group)}</div>
+      ${items.map(it=>`
+        <label class="check ${S.checks[it.id]?"done":""}">
+          <input type="checkbox" data-check="${it.id}" ${S.checks[it.id]?"checked":""}>
+          <span class="q">${esc(it.q)}${(dyn[it.id]||it.why)
+            ?`<span class="why">${esc(dyn[it.id]||it.why)}</span>`:""}</span>
+        </label>`).join("")}
+    </div>`).join("")}
+  <div style="margin-top:30px">
+    ${done===CHECK_ITEMS.length && !blocked
+      ? `<button class="btn pri" data-map="now">All clear — map the trade</button>`
+      : `<p class="hint" style="text-align:center">${CHECK_ITEMS.length-done} still unanswered</p>`}
     <button class="btn ghost" style="margin-top:12px" data-act="resetchecks">Reset</button>
   </div>`;
 }
@@ -623,13 +706,26 @@ function screenModelEdit(){
     <div class="field"><span class="lab">Pairs</span>
       <input type="text" data-m="pairs" value="${esc(d.pairs||"")}" placeholder="XAUUSD"></div>
   </div>
+  <div class="field" style="margin-bottom:0"><span class="lab">Minimum RR</span>
+    <input class="n" type="number" step="0.1" data-m="minRR" value="${d.minRR??""}"
+      placeholder="${S.account.minRR}"><span class="why">Leave blank to use the account floor of ${S.account.minRR}:1</span></div>
+
   <hr class="rule">
-  <div class="sec-t">The four confluences</div>
-  ${[0,1,2,3].map(i=>`
-    <div class="field" style="margin-bottom:10px"><span class="lab">${i+1}</span>
-      <input type="text" data-conf="${i}" value="${esc(d.confluences[i]||"")}" placeholder="What must be present"></div>
-    <div class="field"><input type="text" data-test="${i}" value="${esc((d.tests||[])[i]||"")}"
-      placeholder="The objective test — no judgement call"></div>`).join("")}
+  <div class="rowb" style="margin-bottom:6px">
+    <div class="sec-t" style="margin:0">The four confluences, top down</div>
+    ${!d.id?`<button class="link" data-act="preset">Use my strategy</button>`:""}
+  </div>
+  <p class="hint" style="margin-bottom:20px">One per timeframe. Each must be binary —
+  if it needs a paragraph to decide, it's a feeling, not a confluence.</p>
+  ${TIMEFRAMES.map((tf,i)=>`
+    <div class="tfblock">
+      <span class="tf">${esc(tf)}</span>
+      <div class="field" style="margin-bottom:9px">
+        <input type="text" data-conf="${i}" value="${esc(d.confluences[i]||"")}" placeholder="What must be present"></div>
+      <div class="field" style="margin-bottom:0">
+        <textarea class="test" data-test="${i}"
+          placeholder="How you check it — no judgement call">${esc((d.tests||[])[i]||"")}</textarea></div>
+    </div>`).join("")}
   <p class="note">4 = A+ · 1.00%   3 = B · 0.50%   2 = C · 0.25%   under 2 = no trade</p>
   <hr class="rule">
   <div class="field"><span class="lab">Invalidation — when NOT to take it</span>
@@ -652,10 +748,16 @@ function screenTrade(){
   const riskUsd = d.hypothetical ? 0 : (num(a.size)||0)*(G.risk/100);
   const lots=lotsFor(d.pair,d.entry,d.sl,riskUsd);
   const pips=slPips(d.pair,d.entry,d.sl);
-  const rr=plannedRR(d), rrOk = rr==null || rr>=a.minRR;
+  const floor = m?.minRR ?? a.minRR;
+  const rr=plannedRR(d), rrOk = rr==null || rr>=floor;
   const editing=!!d.id, r=rOf(d);
 
-  return `${head(editing?(isOpen(d)?"Close trade":"Edit trade"):"Map a trade")}
+  const title = editing ? (isOpen(d)?"Close trade":"Edit trade")
+              : d.mappedMode==="eod" ? "Map — end of day" : "Map — now";
+  return `${head(title)}
+  ${!editing&&d.mappedMode==="eod"?`<p class="hint" style="margin:-4px 0 20px">
+    Writing it up after the fact. Set the time it actually happened and the session
+    follows it.</p>`:""}
 
   <div class="field"><span class="lab">Instrument</span>
     <select data-d="pair">${Object.keys(INSTRUMENTS).map(p=>
@@ -665,7 +767,8 @@ function screenTrade(){
     <div class="chips">${["Long","Short"].map(x=>
       `<button class="chip" data-set="direction" data-val="${x}" aria-pressed="${d.direction===x}">${x}</button>`).join("")}</div></div>
 
-  <div class="field"><span class="lab">Session</span>
+  <div class="field"><span class="lab">Session${d.sessionAuto
+      ? ` <span class="auto">from the clock</span>` : ""}</span>
     <div class="chips">${SESSIONS.map(x=>
       `<button class="chip" data-set="session" data-val="${x}" aria-pressed="${d.session===x}">${x}</button>`).join("")}</div></div>
 
@@ -682,9 +785,23 @@ function screenTrade(){
   <hr class="rule">
   <div class="sec-t">Confluences — these set your size, not your conviction</div>
   ${confs.length
-    ? `<div class="chips">${confs.map(c=>`<button class="chip" data-tick="${esc(c)}"
-        aria-pressed="${(d.confluences||[]).includes(c)}">${esc(c)}</button>`).join("")}</div>`
+    ? `<div class="conflist">${confs.map((c,i)=>{
+        const on=(d.confluences||[]).includes(c);
+        return `<button class="conf ${on?"on":""}" data-tick="${esc(c)}" aria-pressed="${on}">
+          <span class="tf">${esc(TIMEFRAMES[i]||i+1)}</span>
+          <span class="ctext">${esc(c)}</span>
+          <span class="box">${on?`<svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>`:""}</span>
+        </button>`;
+      }).join("")}</div>`
     : `<p class="note bad">Pick an entry model first — its confluences are what size the trade.</p>`}
+
+  <button class="conf extra ${d.liqBuildup?"on":""}" data-act="liq" aria-pressed="${!!d.liqBuildup}">
+    <span class="tf">extra</span>
+    <span class="ctext">Liquidity built up before the zone</span>
+    <span class="box">${d.liqBuildup?`<svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>`:""}</span>
+  </button>
+  ${d.liqBuildup?`<p class="hint" style="margin-top:10px">An extra sweep before the move —
+    3R is on the table here, not just ${floor}.</p>`:""}
 
   <div class="grade">
     <span class="glyph ${G.cls}">${G.g}</span>
@@ -714,7 +831,7 @@ function screenTrade(){
       <div class="v s">${lots==null?"—":fx(lots,2)}</div></div>
   </div>
   ${(rr!=null&&!rrOk)?`<p class="note bad" style="margin-top:18px">
-    ${fx(rr,2)}:1 is under your ${a.minRR}:1 floor. That's a no-trade.</p>`:""}
+    ${fx(rr,2)}:1 is under your ${floor}:1 floor. That's a no-trade.</p>`:""}
 
   <hr class="rule">
   <div class="sec-t">Why — written now, while you still don't know the answer</div>
@@ -863,9 +980,14 @@ function render(){
 }
 function go(s){ S.screen=s; render(); }
 
-const newDraft = (over={}) => ({
-  id:null, date:today(), time:nowHM(), pair:"XAUUSD", direction:"Long", session:"London",
-  model:S.models[0]?.name||"", confluences:[], confidence:3,
+/* mode "now"  — mapped at the moment of entry; the clock picks the session.
+   mode "eod"  — written up afterwards; the session still follows the time you type,
+                 until you override it by hand. */
+const newDraft = (mode="now", over={}) => ({
+  id:null, mappedMode:mode,
+  date:today(), time:nowHM(), session:sessionFor(new Date()), sessionAuto:true,
+  pair:"XAUUSD", direction:"Long",
+  model:S.models[0]?.name||"", confluences:[], confidence:3, liqBuildup:false,
   entry:"", sl:"", tp:"", exit:"", pnl:"", lots:"",
   mentalBefore:"Calm", followedPlan:true, mistakes:[],
   entryReason:"", slReason:"", tpReason:"", reviewNotes:"",
@@ -883,15 +1005,15 @@ document.addEventListener("submit", async e=>{
 });
 
 document.addEventListener("click", async e=>{
-  const t=e.target.closest("[data-go],[data-act],[data-set],[data-tick],[data-mis],[data-trade],[data-model],[data-period],[data-dash]");
+  const t=e.target.closest("[data-go],[data-map],[data-act],[data-set],[data-tick],[data-mis],[data-trade],[data-model],[data-period],[data-dash]");
   if(!t) return;
 
   if(t.dataset.period){ S.period=t.dataset.period; S.keepScroll=true; render(); return; }
   if(t.dataset.dash){ S.dash=t.dataset.dash; render(); return; }
+  if(t.dataset.map){ S.draft=newDraft(t.dataset.map); go("trade"); return; }
 
   if(t.dataset.go){
     const g=t.dataset.go;
-    if(g==="map"){ S.draft=newDraft(); go("trade"); return; }
     if(g==="newmodel"){
       S.draft={id:null,name:"",confluences:["","","",""],tests:["","","",""],
                sessions:"",pairs:"",invalidation:"",failureMode:""};
@@ -919,6 +1041,8 @@ document.addEventListener("click", async e=>{
   if(t.dataset.set){
     const k=t.dataset.set;
     S.draft[k] = k==="confidence" ? +t.dataset.val : t.dataset.val;
+    // Touching the session by hand means you meant it — stop deriving it from the clock.
+    if(k==="session") S.draft.sessionAuto=false;
     S.keepScroll=true; render(); return;
   }
   if(t.dataset.tick){
@@ -942,13 +1066,19 @@ document.addEventListener("click", async e=>{
       break;
     }
     case "signout": await sb.auth.signOut(); S.user=null; S.trades=[]; S.models=[]; render(); break;
+    case "preset":
+      S.draft={...S.draft, ...PRESET,
+        confluences:[...PRESET.confluences], tests:[...PRESET.tests]};
+      S.keepScroll=true; render(); toast("Filled in — edit anything that isn't right"); break;
+    case "liq":
+      S.draft.liqBuildup=!S.draft.liqBuildup; S.keepScroll=true; render(); break;
     case "paste": await pasteCTrader(); break;
     case "resetchecks": S.checks={}; render(); break;
     case "rmshot": S.draft[t.dataset.which]=null; S.keepScroll=true; render(); break;
     case "showall": S.intake.symbol=""; render(); break;
     case "intakenew": {
       const I=S.intake;
-      S.draft=newDraft({pair:I.symbol||"XAUUSD",direction:I.direction,pnl:I.pnl,lots:I.lots??""});
+      S.draft=newDraft("eod",{pair:I.symbol||"XAUUSD",direction:I.direction,pnl:I.pnl,lots:I.lots??""});
       S.intake=null; go("trade"); break;
     }
     case "savetrade": {
@@ -997,6 +1127,10 @@ document.addEventListener("input", e=>{
   const el=e.target, d=S.draft;
   if(el.dataset.d!=null && d){
     d[el.dataset.d]=el.value;
+    if(["date","time"].includes(el.dataset.d) && d.sessionAuto){
+      const s=sessionFromFields(d.date,d.time);
+      if(s && s!==d.session){ d.session=s; S.keepScroll=true; render(); return; }
+    }
     if(["entry","sl","tp","pnl","exit"].includes(el.dataset.d)){
       const k=el.dataset.d, pos=el.selectionStart;
       S.keepScroll=true; render();
@@ -1023,8 +1157,13 @@ document.addEventListener("change", async e=>{
     S.account={...S.account,[el.dataset.acctbool]:el.checked};
     await saveAccount(); S.keepScroll=true; render(); return;
   }
-  if(el.dataset.d!=null && el.tagName==="SELECT" && S.draft){
-    S.draft[el.dataset.d]=el.value; S.keepScroll=true; render(); return;
+  if(el.dataset.d!=null && S.draft && (el.tagName==="SELECT" || el.type==="date" || el.type==="time")){
+    S.draft[el.dataset.d]=el.value;
+    if(["date","time"].includes(el.dataset.d) && S.draft.sessionAuto){
+      const s=sessionFromFields(S.draft.date,S.draft.time);
+      if(s) S.draft.session=s;
+    }
+    S.keepScroll=true; render(); return;
   }
   if(el.dataset.shot!=null && S.draft){
     const f=el.files?.[0]; if(!f) return;
