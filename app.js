@@ -189,7 +189,14 @@ const S = {
   screen:"home", trades:[], models:[], account:{...DEFAULT_ACCOUNT},
   period:"day", draft:null, dash:"stats", checks:{}, checkDate:"",
   intake:null, keepScroll:false, busy:false,
+  /* Testing mode is a property of this device, not of the trading plan, so it lives
+     in localStorage and never touches the account's rules. */
+  testing:(()=>{ try{ return localStorage.getItem("cf.testing")==="1"; }catch(_){ return false; } })(),
 };
+function setTesting(on){
+  S.testing=on;
+  try{ localStorage.setItem("cf.testing", on?"1":"0"); }catch(_){}
+}
 
 /* ========================= helpers ========================= */
 
@@ -318,7 +325,10 @@ function guard(){
   if(redDays>=3) warns.push(`${redDays} red days running. Take a day off, then C size only until a green day.`);
   if(a.greenLock && done.length===1 && rToday>=2) warns.push(`Trade 1 closed ${asR(rToday)}. Green-lock says stop here.`);
 
-  return {blocks,warns,todays,done,rToday,pctToday,pctWeek,streak,acct};
+  // Testing mode suspends the blocks but still computes them, so the screen can
+  // show exactly which rules you are currently ignoring.
+  return {blocks: S.testing ? [] : blocks, muted: S.testing ? blocks : [],
+          warns, todays, done, rToday, pctToday, pctWeek, streak, acct};
 }
 
 function periodStats(period){
@@ -557,7 +567,13 @@ function screenHome(){
   const unmarked=S.trades.filter(t=>t.date===today() && !t.result).length;
   const eodDue=unmarked>0 && hoursToAsia()<=3;
 
-  const status = eodDue
+  const status = S.testing
+    ? `<div class="status test"><span class="dot"></span><div>
+         <b>Testing mode.</b> Your rules are suspended — log as many trades as you like.
+         ${G.muted.length?`<span class="why">Would be blocked: ${esc(G.muted.join(" "))}</span>`:""}
+         <button class="link" data-act="testoff" style="display:block;margin-top:6px">Turn it off</button>
+       </div></div>`
+    : eodDue
     ? `<div class="status warn"><span class="dot"></span><div>
          <b>${unmarked} ${unmarked===1?"trade":"trades"} still unmarked.</b>
          Asia opens ${asiaOpenLocal()} — be flat and written up before then.
@@ -1232,6 +1248,12 @@ function screenSettings(){
     <input type="checkbox" data-acctbool="greenLock" ${a.greenLock?"checked":""}>
     <span class="q">Green-lock<span class="why">Stop for the day if trade 1 closes +2R or better</span></span></label>
 
+  <label class="check">
+    <input type="checkbox" data-testing ${S.testing?"checked":""}>
+    <span class="q">Testing mode<span class="why">Suspends every block — trade count, daily stop,
+      losing streak, weekly stop — so you can put trades in freely. This device only, and it
+      changes nothing about the rules above.</span></span></label>
+
   <hr class="rule">
   <div class="sec-t">Data</div>
   <p class="hint">Signed in as ${esc(S.user?.email||"—")} · ${S.trades.length} trades stored.</p>
@@ -1378,6 +1400,7 @@ document.addEventListener("click", async e=>{
       break;
     }
     case "signout": await sb.auth.signOut(); S.user=null; S.trades=[]; S.models=[]; render(); break;
+    case "testoff": setTesting(false); render(); toast("Rules back on"); break;
     case "liq":
       S.draft.liqBuildup=!S.draft.liqBuildup; S.keepScroll=true; render(); break;
     case "paste": await pasteCTrader(); break;
@@ -1468,6 +1491,7 @@ document.addEventListener("input", e=>{
 
 document.addEventListener("change", async e=>{
   const el=e.target;
+  if(el.hasAttribute("data-testing")){ setTesting(el.checked); S.keepScroll=true; render(); return; }
   if(el.dataset.check!=null){ S.checks[+el.dataset.check]=el.checked; S.keepScroll=true; render(); return; }
   if(el.dataset.dbool!=null && S.draft){ S.draft[el.dataset.dbool]=el.checked; S.keepScroll=true; render(); return; }
   if(el.dataset.acct!=null){

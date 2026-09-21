@@ -140,6 +140,10 @@ p{margin:0}
 .status.stop b{color:var(--down)}
 .status.warn{background:rgba(233,180,76,.1);color:#F0D9A8}
 .status.warn .dot{background:var(--amber)}
+.status.test{background:rgba(41,98,255,.13);color:#C3D4FF}
+.status.test .dot{background:var(--blue-lift)}
+.status.test b{color:var(--blue-lift)}
+.status .why{display:block;font-size:.8rem;color:var(--tx-3);margin-top:5px}
 
 /* ---------- home tiles ---------- */
 .tiles{display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-top:11px}
