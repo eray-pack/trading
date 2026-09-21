@@ -4,6 +4,10 @@
 
 "use strict";
 
+/* Bumped with every deploy, shown in Settings, so "am I actually on the new build?"
+   has an answer that doesn't involve guessing at the service worker. */
+const BUILD = "v9";
+
 const SUPABASE_URL = "https://ovigsifjypyznhvshmsl.supabase.co";
 const SUPABASE_KEY = "sb_publishable_C_Nv_U7v1gnxpL4OMmJPOA_4ryMrT6V";
 
@@ -1259,7 +1263,9 @@ function screenSettings(){
   <p class="hint">Signed in as ${esc(S.user?.email||"—")} · ${S.trades.length} trades stored.</p>
   <button class="btn" style="margin-top:16px" data-act="export">Copy all trades as CSV</button>
   <button class="btn ghost" style="margin-top:10px" data-act="signout">Sign out</button>
-  <p class="hint" style="text-align:center;margin-top:34px">Log the thesis before the outcome exists.</p>`;
+  <p class="hint" style="text-align:center;margin-top:34px">Log the thesis before the outcome exists.</p>
+  <p class="hint" style="text-align:center;margin-top:10px;font-size:.74rem">
+    Build ${BUILD} · <button class="link" data-act="hardreload" style="font-size:.74rem">force update</button></p>`;
 }
 
 /* ========================= render ========================= */
@@ -1401,6 +1407,18 @@ document.addEventListener("click", async e=>{
     }
     case "signout": await sb.auth.signOut(); S.user=null; S.trades=[]; S.models=[]; render(); break;
     case "testoff": setTesting(false); render(); toast("Rules back on"); break;
+    case "hardreload": {
+      // Tear the service worker and its caches down, then come back from the network.
+      toast("Updating…");
+      try{
+        const regs = await navigator.serviceWorker?.getRegistrations?.() ?? [];
+        await Promise.all(regs.map(r => r.unregister()));
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      }catch(_){}
+      location.reload();
+      break;
+    }
     case "liq":
       S.draft.liqBuildup=!S.draft.liqBuildup; S.keepScroll=true; render(); break;
     case "paste": await pasteCTrader(); break;
