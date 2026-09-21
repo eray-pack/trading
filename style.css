@@ -197,6 +197,22 @@ p{margin:0}
 }
 .conf.on .box{background:var(--blue);border-color:var(--blue)}
 .conf .box svg{width:14px;height:14px;stroke:#fff;fill:none;stroke-width:3}
+.conf .why{display:block;font-size:.78rem;color:var(--tx-3);margin-top:3px}
+.conf.on .why{color:var(--tx-2)}
+.gategroup{margin-bottom:18px}
+.gategroup .tf{display:inline-block;margin-bottom:8px;background:var(--bg)}
+
+/* ---------- risk picker ---------- */
+.riskpick{
+  background:var(--raise);border-radius:var(--r);padding:17px 18px;margin-top:6px;
+}
+.chips.risk{gap:9px}
+.chips.risk .chip{
+  flex:1;text-align:center;font-family:var(--mono);font-size:1rem;
+  padding-block:14px;background:var(--raise-2);
+}
+.chips.risk .chip[aria-pressed="true"]{background:var(--blue);color:#fff}
+
 .conf.extra{margin-top:9px;background:none;border:1px dashed var(--hair-2)}
 .conf.extra.on{background:rgba(233,180,76,.12);border-color:transparent;color:var(--tx)}
 .conf.extra.on .box{background:var(--amber);border-color:var(--amber)}

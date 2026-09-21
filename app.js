@@ -118,15 +118,35 @@ const PRESETS = [
   },
 ];
 
-/* Ticked on the map screen, saved onto the trade — so skipping one becomes measurable
-   rather than just regrettable. */
+/* Built from what he actually writes in the entry box, trade after trade:
+   orderflow direction, the sweep, the break, the 15M OB at the fib, entry from
+   the imbalance under liquidity, stop under the sweep extreme, 2.5 RR.
+   Ticked on the map screen and saved onto the trade, so a skipped step becomes
+   measurable rather than just regrettable. */
 const PRE_TRADE = [
-  {id:"drawn",  q:"Levels drawn and screenshot taken, before entry"},
-  {id:"stopsw", q:"Stop is on the sweep, not a pip count"},
-  {id:"rr",     q:"RR is above my floor"},
-  {id:"sess",   q:"In session, no news due in the next 30 minutes"},
-  {id:"calm",   q:"Not FOMO, not revenge, not tired"},
+  ["Orderflow", [
+    {id:"of",   q:"Orderflow direction marked — up or down", why:""},
+    {id:"htf",  q:"HTF agrees and isn't about to reverse",   why:"The one that turns a good read into a loss."},
+  ]],
+  ["Setup", [
+    {id:"sweep",q:"Sweep taken",                             why:""},
+    {id:"break",q:"Break after the sweep",                   why:"Sweep alone is not the setup."},
+    {id:"ob",   q:"OB on the 15M sitting at the fib level",  why:""},
+    {id:"imb",  q:"Entry from the imbalance, under the liquidity", why:""},
+  ]],
+  ["Execution", [
+    {id:"sl",   q:"Stop under the sweep extreme",            why:""},
+    {id:"rr",   q:"2.5 RR minimum",                          why:"3 when the zone is clean."},
+    {id:"zone", q:"Imbalance or HTF zone sitting at the target", why:""},
+  ]],
+  ["Head", [
+    {id:"calm", q:"Not FOMO, not revenge, not tired",        why:""},
+  ]],
 ];
+const PRE_TRADE_ITEMS = PRE_TRADE.flatMap(([,items]) => items);
+
+/* The ladder's sizes. Also the options offered when the grade can't decide. */
+const RISK_STEPS = [1, 0.5, 0.25];
 
 /* NF is not a fourth outcome, it's the absence of one: the limit never filled,
    so it costs nothing, counts for nothing, and doesn't spend one of the day's two. */
@@ -893,7 +913,9 @@ function screenTrade(){
   const confs=(m?.confluences||[]).filter(Boolean);
   const ticked=(d.confluences||[]).filter(c=>confs.includes(c)).length;
   const G=gradeFor(ticked);
-  const riskUsd = d.hypothetical ? 0 : (num(a.size)||0)*(G.risk/100);
+  // The grade proposes; an explicit pick wins. Never silently zero.
+  const riskPct = d.riskPct!=null ? num(d.riskPct) : (G.risk || null);
+  const riskUsd = d.hypothetical ? 0 : (num(a.size)||0)*((riskPct||0)/100);
   const lots=lotsFor(d.pair,d.entry,d.sl,riskUsd);
   const pips=slPips(d.pair,d.entry,d.sl);
   const floor = m?.minRR ?? a.minRR;
@@ -916,13 +938,20 @@ function screenTrade(){
          <span class="sm">Before the entry, not after</span></label>`}
 
   <hr class="rule">
-  <div class="sec-t">Before I click</div>
-  <div class="conflist">${PRE_TRADE.map(it=>{
-    const on=(d.checks||[]).includes(it.id);
-    return `<button class="conf ${on?"on":""}" data-gate="${it.id}" aria-pressed="${on}">
-      <span class="ctext">${esc(it.q)}</span>
-      <span class="box">${on?tickSVG:""}</span></button>`;
-  }).join("")}</div>
+  <div class="rowb" style="margin-bottom:14px">
+    <div class="sec-t" style="margin:0">Before I click</div>
+    <span class="hint">${(d.checks||[]).length}/${PRE_TRADE_ITEMS.length}</span>
+  </div>
+  ${PRE_TRADE.map(([group,items])=>`
+    <div class="gategroup">
+      <span class="tf">${esc(group)}</span>
+      <div class="conflist">${items.map(it=>{
+        const on=(d.checks||[]).includes(it.id);
+        return `<button class="conf ${on?"on":""}" data-gate="${it.id}" aria-pressed="${on}">
+          <span class="ctext">${esc(it.q)}${it.why?`<span class="why">${esc(it.why)}</span>`:""}</span>
+          <span class="box">${on?tickSVG:""}</span></button>`;
+      }).join("")}</div>
+    </div>`).join("")}
 
   <hr class="rule">
   <div class="field"><span class="lab">Instrument</span>
@@ -972,11 +1001,24 @@ function screenTrade(){
   <div class="grade">
     <span class="glyph ${G.cls}">${G.g}</span>
     <div style="flex:1;min-width:0">
-      <div class="rowb"><span class="hint">Risk</span>
-        <span class="num">${G.risk?`${fx(G.risk,2)}%`:"—"}</span></div>
       <div class="bars">${[0,1,2,3].map(i=>`<i class="${i<ticked?"on":""}"></i>`).join("")}</div>
       <p class="hint" style="margin-top:10px">${G.note}</p>
     </div>
+  </div>
+
+  <div class="riskpick">
+    <div class="rowb" style="margin-bottom:11px">
+      <span class="lab" style="margin:0">Risk on this trade</span>
+      <span class="num ${riskPct?"":"down"}" style="font-size:1.15rem">${riskPct?fx(riskPct,2)+"%":"not set"}</span>
+    </div>
+    <div class="chips risk">${RISK_STEPS.map(v=>
+      `<button class="chip" data-risk="${v}" aria-pressed="${riskPct===v}">${v}%</button>`).join("")}</div>
+    ${confs.length<4?`<p class="note bad" style="margin-top:14px">
+      <b>${esc(d.model||"This model")}</b> has only ${confs.length} confluence${confs.length===1?"":"s"} defined,
+      so the grade can never reach C and the size can't be decided for you.
+      Pick the risk here, and finish the four in Entry models.</p>`
+    : G.risk && riskPct!==G.risk ? `<p class="hint" style="margin-top:12px">
+      ${ticked} of 4 ticked says ${fx(G.risk,2)}%. You've set ${fx(riskPct,2)}%.</p>` : ""}
   </div>
 
   <hr class="rule">
@@ -1234,7 +1276,7 @@ const newDraft = (mode="now", over={}) => ({
   pair:"XAUUSD", direction:"Long",
   model:S.models[0]?.name||"", confluences:[], confidence:3, liqBuildup:false,
   entry:"", sl:"", tp:"", exit:"", pnl:"", lots:"",
-  checks:[], result:null, resultPct:null, mentalNotes:"",
+  checks:[], result:null, resultPct:null, mentalNotes:"", riskPct:null,
   mentalBefore:"Calm", followedPlan:true, mistakes:[],
   entryReason:"", slReason:"", tpReason:"", reviewNotes:"",
   chartBefore:null, chartAfter:null, hypothetical:false, ...over,
@@ -1251,13 +1293,17 @@ document.addEventListener("submit", async e=>{
 });
 
 document.addEventListener("click", async e=>{
-  const t=e.target.closest("[data-go],[data-map],[data-act],[data-set],[data-tick],[data-gate],[data-result],[data-preset],[data-mis],[data-trade],[data-model],[data-period],[data-dash]");
+  const t=e.target.closest("[data-go],[data-map],[data-act],[data-set],[data-tick],[data-gate],[data-risk],[data-result],[data-preset],[data-mis],[data-trade],[data-model],[data-period],[data-dash]");
   if(!t) return;
 
   if(t.dataset.preset){
     const p=PRESETS[+t.dataset.preset];
     S.draft={...S.draft, ...p, confluences:[...p.confluences], tests:[...p.tests]};
     S.keepScroll=true; render(); toast("Filled in — edit anything that isn't right"); return;
+  }
+  if(t.dataset.risk){
+    S.draft.riskPct = num(t.dataset.risk);
+    S.keepScroll=true; render(); return;
   }
   if(t.dataset.gate){
     const g=t.dataset.gate, arr=S.draft.checks||[];
@@ -1350,8 +1396,10 @@ document.addEventListener("click", async e=>{
       const confs=(m?.confluences||[]).filter(Boolean);
       const ticked=(d.confluences||[]).filter(c=>confs.includes(c)).length;
       const G=gradeFor(ticked);
-      const body={...d, grade:G.g, riskPct:G.risk,
-        riskUsd: d.riskUsd ?? (num(a.size)||0)*(G.risk/100),
+      const risk = d.riskPct!=null ? num(d.riskPct) : G.risk;
+      if(!risk) return toast("Pick the risk for this trade first");
+      const body={...d, grade:G.g, riskPct:risk,
+        riskUsd:(num(a.size)||0)*(risk/100),
         plannedRR:plannedRR(d)};
       S.busy=true; t.textContent="Saving…";
       try{ await saveTrade(body); S.draft=null; go("home"); toast("Logged"); }
