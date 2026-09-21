@@ -206,6 +206,20 @@ p{margin:0}
 .gategroup{margin-bottom:18px}
 .gategroup .tf{display:inline-block;margin-bottom:8px;background:var(--bg)}
 
+/* ---------- direction ---------- */
+/* Sits directly under the screenshot: the checklist wording mirrors on it,
+   so it has to be decided before anything below is readable. */
+.dirpick{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+.dir{
+  appearance:none;border:0;cursor:pointer;font-family:var(--sans);
+  font-size:1.05rem;font-weight:600;letter-spacing:-.01em;
+  padding:18px 0;border-radius:var(--r-sm);
+  background:var(--raise);color:var(--tx-3);
+}
+.dir:active{opacity:.75}
+.dir.on{background:var(--blue);color:#fff}
+.dir:focus-visible{outline:2px solid var(--blue-lift);outline-offset:2px}
+
 /* ---------- entry type ---------- */
 .entrytypes{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .etype{

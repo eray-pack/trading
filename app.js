@@ -6,7 +6,7 @@
 
 /* Bumped with every deploy, shown in Settings, so "am I actually on the new build?"
    has an answer that doesn't involve guessing at the service worker. */
-const BUILD = "v10";
+const BUILD = "v11";
 
 const SUPABASE_URL = "https://ovigsifjypyznhvshmsl.supabase.co";
 const SUPABASE_KEY = "sb_publishable_C_Nv_U7v1gnxpL4OMmJPOA_4ryMrT6V";
@@ -805,6 +805,10 @@ function screenTrade(){
          <span>Add the screenshot</span>
          <span class="sm">Before the entry, not after</span></label>`}
 
+  <div class="dirpick">${["Long","Short"].map(x=>
+    `<button class="dir ${d.direction===x?"on":""}" data-set="direction" data-val="${x}"
+      aria-pressed="${d.direction===x}">${x}</button>`).join("")}</div>
+
   <hr class="rule">
   <div class="sec-t">Why this entry</div>
   <p class="hint" style="margin:-8px 0 12px">Talk to yourself. Why are you actually taking this one?</p>
@@ -832,10 +836,6 @@ function screenTrade(){
   <div class="field"><span class="lab">Instrument</span>
     <select data-d="pair">${Object.keys(INSTRUMENTS).map(p=>
       `<option ${d.pair===p?"selected":""}>${p}</option>`).join("")}</select></div>
-
-  <div class="field"><span class="lab">Direction</span>
-    <div class="chips">${["Long","Short"].map(x=>
-      `<button class="chip" data-set="direction" data-val="${x}" aria-pressed="${d.direction===x}">${x}</button>`).join("")}</div></div>
 
   <div class="field"><span class="lab">Session${d.sessionAuto
       ? ` <span class="auto">from the clock</span>` : ""}</span>
