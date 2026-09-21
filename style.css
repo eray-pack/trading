@@ -206,6 +206,21 @@ p{margin:0}
 .gategroup{margin-bottom:18px}
 .gategroup .tf{display:inline-block;margin-bottom:8px;background:var(--bg)}
 
+/* ---------- entry type ---------- */
+.entrytypes{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.etype{
+  appearance:none;border:0;cursor:pointer;text-align:left;
+  background:var(--raise);color:var(--tx-2);border-radius:var(--r-sm);
+  padding:15px 16px;display:flex;flex-direction:column;gap:5px;font-family:var(--sans);
+}
+.etype:active{opacity:.75}
+.etype.on{background:rgba(41,98,255,.16);color:var(--tx)}
+.etype:focus-visible{outline:2px solid var(--blue-lift);outline-offset:2px}
+.etype .n{font-size:.95rem;font-weight:500;line-height:1.3}
+.etype .rr{font-family:var(--mono);font-size:.78rem;color:var(--tx-3)}
+.etype.on .rr{color:var(--blue-lift)}
+textarea.tall{min-height:118px}
+
 /* ---------- risk picker ---------- */
 .riskpick{
   background:var(--raise);border-radius:var(--r);padding:17px 18px;margin-top:6px;
