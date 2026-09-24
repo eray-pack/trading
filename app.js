@@ -6,7 +6,7 @@
 
 /* Bumped with every deploy, shown in Settings, so "am I actually on the new build?"
    has an answer that doesn't involve guessing at the service worker. */
-const BUILD = "v11";
+const BUILD = "v12";
 
 const SUPABASE_URL = "https://ovigsifjypyznhvshmsl.supabase.co";
 const SUPABASE_KEY = "sb_publishable_C_Nv_U7v1gnxpL4OMmJPOA_4ryMrT6V";
@@ -38,44 +38,18 @@ const INSTRUMENTS = {
 };
 
 const DEFAULT_ACCOUNT = {
-  firm:"", size:50000, dailyDDPct:5, maxDDPct:10, targetPct:10,
-  ownDailyStopPct:2, ownWeeklyStopPct:4,
-  maxTradesDay:2, maxConsecLosses:2, minRR:2, greenLock:true,
+  /* One rule, on purpose. Two trades a day is the whole discipline: it forces
+     the question "is this a master setup?" instead of "am I allowed?". The other
+     columns still exist in the database but nothing reads them any more. */
+  maxTradesDay: 2,
+  firm:"", size:100000, dailyDDPct:100, maxDDPct:100, targetPct:10,
+  ownDailyStopPct:100, ownWeeklyStopPct:100, maxConsecLosses:99, minRR:2.5, greenLock:false,
 };
 
 /* The four timeframes the entry model is built on, top down. Index-aligned with
    a model's `confluences` and `tests` arrays. */
 const TIMEFRAMES = ["4H","1H","15/30M","1M entry"];
 
-/* The checklist follows the order the analysis is actually done in: bias before
-   setup, setup before confirmation, confirmation before size. */
-const CHECKLIST = [
-  ["Bias — top down", [
-    {id:"ob4h",  q:"4H orderblocks mapped and a bias written down?", why:"Direction first. Before the fib, before anything."},
-    {id:"h1",    q:"Does the 1H agree with the 4H?",                 why:"If the 1H is fighting it, there is no trade."},
-  ]],
-  ["Setup — the zone", [
-    {id:"range", q:"Orderflow range marked, extreme high to extreme low?", why:""},
-    {id:"fib",   q:"Fib drawn — is price inside the 0.786?",         why:"The tap is the invitation, not the entry."},
-    {id:"liq",   q:"Liquidity built up before the zone?",            why:"An extra sweep before the move. If yes, you can target 3R."},
-  ]],
-  ["Confirmation — lower timeframe", [
-    {id:"sweep", q:"15M/5M swept, then broke, with the bias?",       why:"No sweep-and-break, no entry. This one is not negotiable."},
-  ]],
-  ["Execution", [
-    {id:"stop",  q:"Stop sitting on the sweep?",                     why:"A place, not a pip count."},
-    {id:"entry", q:"Entry off the 0.786, far enough from the stop?", why:""},
-    {id:"rr",    q:"Is RR at least 2.5?",                            why:""},
-  ]],
-  ["Gate", [
-    {id:"sess",  q:"Inside my session?",                             why:"Outside it is a no-trade, however good it looks."},
-    {id:"left",  q:"Do I have a trade left today?",                  why:""},
-    {id:"stopd", q:"Am I inside my daily stop?",                     why:""},
-    {id:"shot",  q:"Screenshot taken with levels drawn?",            why:"Before entry, not after."},
-    {id:"mind",  q:"Mental state, honestly?",                        why:"FOMO, revenge or tired is a no-trade."},
-  ]],
-];
-const CHECK_ITEMS = CHECKLIST.flatMap(([,items]) => items);
 
 /* Built from what he actually writes in the entry box, trade after trade:
    orderflow direction, the sweep, the break, the 15M OB at the fib, entry from
@@ -86,30 +60,39 @@ const CHECK_ITEMS = CHECKLIST.flatMap(([,items]) => items);
    "sweep the last low, break up" is the same idea mirrored — and a checklist you have
    to mentally invert is one you stop reading. */
 const PRE_TRADE = [
-  ["Orderflow", [
-    {id:"of",   q:{Long:"Orderflow matches my route — long",
-                   Short:"Orderflow matches my route — short"},
+  ["4H — bias", [
+    {id:"of4h", q:{Long:"4H orderflow is up and matches my route",
+                   Short:"4H orderflow is down and matches my route"},
                 why:"Not just present. Pointing my way."},
-    {id:"htf",  q:"HTF agrees and isn't about to reverse",
+    {id:"htf",  q:"HTF isn't about to reverse on me",
                 why:"The one that turns a good read into a loss."},
   ]],
-  ["Setup", [
-    {id:"sweep",q:{Long:"Last low swept — previous demand taken",
-                   Short:"Last high swept — previous supply taken"}, why:""},
+  ["1H — the level", [
+    {id:"sweep",q:{Long:"1H swept the last low — previous demand taken",
+                   Short:"1H swept the last high — previous supply taken"}, why:""},
     {id:"break",q:{Long:"Break to the upside — supply disrespected",
                    Short:"Break to the downside — demand disrespected"},
                 why:"Sweep alone is not the setup."},
-    {id:"ob",   q:"OB on the 15M sitting at the fib level",  why:""},
+    {id:"fib",  q:"Fib drawn from the sweep to the extreme", why:""},
+  ]],
+  ["15/5M — the entry", [
+    {id:"ob",   q:"OB on the 15M sitting at the fib level", why:""},
     {id:"imb",  q:{Long:"Entry from the imbalance, under the liquidity",
                    Short:"Entry from the imbalance, above the liquidity"}, why:""},
+    {id:"sl",   q:{Long:"Stop under the sweep extreme",
+                   Short:"Stop above the sweep extreme"}, why:"A place, not a pip count."},
   ]],
-  ["Execution", [
-    {id:"sl",   q:"Stop under the sweep extreme",            why:""},
-    {id:"rr",   q:"2.5 RR minimum",                          why:"3 when the zone is clean."},
-    {id:"zone", q:"Imbalance or HTF zone sitting at the target", why:""},
+  ["In the position", [
+    {id:"reentry", q:{Long:"Re-entry if a supply breaks into a CHoCH",
+                      Short:"Re-entry if a demand breaks into a CHoCH"},
+                   why:"The confirmation entry inside the position."},
+    {id:"be",      q:{Long:"BE once the previous supply zone breaks",
+                      Short:"BE once the previous demand zone breaks"}, why:""},
   ]],
   ["Head", [
-    {id:"calm", q:"Not FOMO, not revenge, not tired",        why:""},
+    {id:"waited",q:"I waited for this one — I didn't go looking for it",
+                 why:"Two a day. Master setups only."},
+    {id:"calm",  q:"Not FOMO, not revenge, not tired", why:""},
   ]],
 ];
 const PRE_TRADE_ITEMS = PRE_TRADE.flatMap(([,items]) => items);
@@ -277,13 +260,10 @@ function guard(){
   for(const d of Object.keys(byDay).sort().reverse()){ if(byDay[d]<0) redDays++; else break; }
 
   const blocks=[], warns=[];
-  if(todays.length>=a.maxTradesDay) blocks.push(`${todays.length} trades taken. Win, lose or breakeven — you're done.`);
-  if(pctToday<=-a.ownDailyStopPct)  blocks.push(`Down ${fx(pctToday,2)}% today. Your stop is −${a.ownDailyStopPct}%.`);
-  if(streak>=a.maxConsecLosses)     blocks.push(`${streak} losses in a row.`);
-  if(pctWeek<=-a.ownWeeklyStopPct)  blocks.push(`Down ${fx(pctWeek,2)}% this week. Flat until Monday.`);
-
-  if(redDays>=3) warns.push(`${redDays} red days running. Take a day off, then C size only until a green day.`);
-  if(a.greenLock && done.length===1 && rToday>=2) warns.push(`Trade 1 closed ${asR(rToday)}. Green-lock says stop here.`);
+  if(todays.length>=a.maxTradesDay)
+    blocks.push(`${todays.length} trades taken. That's the day — the next one can wait.`);
+  if(todays.length===a.maxTradesDay-1 && todays.length>0)
+    warns.push(`One trade left today. Make it a setup you waited for.`);
 
   // Testing mode suspends the blocks but still computes them, so the screen can
   // show exactly which rules you are currently ignoring.
@@ -494,7 +474,7 @@ function screenAuth(){
 function screenHome(){
   const G=guard(), a=S.account, P=periodStats(S.period);
   const blocked=G.blocks.length>0;
-  const ck=(S.checkDate===today()) ? Object.values(S.checks).filter(Boolean).length : 0;
+  const ck=(S.checkDate===today()) ? PRE_TRADE_ITEMS.filter(i=>S.checks[i.id]).length : 0;
   const op=openTrades();
 
   const unmarked=S.trades.filter(t=>t.date===today() && !t.result).length;
@@ -561,7 +541,7 @@ function screenHome(){
   <div class="pills small">
     <button class="pill" data-go="checklist">
       ${ic("check")}<span class="t">Checklist</span>
-      <span class="c">${ck}/${CHECK_ITEMS.length}</span>
+      <span class="c">${ck}/${PRE_TRADE_ITEMS.length}</span>
     </button>
   </div>
 
@@ -596,33 +576,28 @@ function tradeItem(t){
 function screenChecklist(){
   if(S.checkDate!==today()){ S.checks={}; S.checkDate=today(); }
   const a=S.account, G=guard();
-  const floor=a.minRR;
-  const dyn={
-    left:`${a.maxTradesDay-G.todays.length} of ${a.maxTradesDay} left`,
-    stopd:`${fx(G.pctToday,2)}% today, stop at −${a.ownDailyStopPct}%`,
-    rr:`your floor is ${floor}:1`,
-    sess:`right now that's ${sessionFor(new Date())}`,
-  };
-  const done=CHECK_ITEMS.filter(i=>S.checks[i.id]).length;
-  const blocked=G.blocks.length>0;
+  const dir=S.ckDir||"Long";
+  const dirOf = q => typeof q==="string" ? q : (q[dir] || q.Long);
+  const done=PRE_TRADE_ITEMS.filter(i=>S.checks[i.id]).length;
 
   return `${head("Checklist")}
-  <p class="hint" style="margin-bottom:8px">Read them out loud — it only works out loud.
-  Top down, in the order you actually do it. Resets daily.</p>
-  ${CHECKLIST.map(([group,items])=>`
+  <p class="hint" style="margin-bottom:16px">The same list you tick on a trade. Read it out loud —
+  it only works out loud. ${a.maxTradesDay-G.todays.length} of ${a.maxTradesDay} trades left today.</p>
+  <div class="dirpick" style="margin:0 0 6px">${["Long","Short"].map(x=>
+    `<button class="dir ${dir===x?"on":""}" data-ckdir="${x}" aria-pressed="${dir===x}">${x}</button>`).join("")}</div>
+  ${PRE_TRADE.map(([group,items])=>`
     <div class="sec">
       <div class="sec-t">${esc(group)}</div>
       ${items.map(it=>`
         <label class="check ${S.checks[it.id]?"done":""}">
           <input type="checkbox" data-check="${it.id}" ${S.checks[it.id]?"checked":""}>
-          <span class="q">${esc(it.q)}${(dyn[it.id]||it.why)
-            ?`<span class="why">${esc(dyn[it.id]||it.why)}</span>`:""}</span>
+          <span class="q">${esc(dirOf(it.q))}${it.why?`<span class="why">${esc(it.why)}</span>`:""}</span>
         </label>`).join("")}
     </div>`).join("")}
   <div style="margin-top:30px">
-    ${done===CHECK_ITEMS.length && !blocked
+    ${done===PRE_TRADE_ITEMS.length && !G.blocks.length
       ? `<button class="btn pri" data-map="now">All clear — map the trade</button>`
-      : `<p class="hint" style="text-align:center">${CHECK_ITEMS.length-done} still unanswered</p>`}
+      : `<p class="hint" style="text-align:center">${PRE_TRADE_ITEMS.length-done} still unanswered</p>`}
     <button class="btn ghost" style="margin-top:12px" data-act="resetchecks">Reset</button>
   </div>`;
 }
@@ -667,14 +642,14 @@ function statsRings(cl){
   const share=top?top[1]/cl.length*100:0;
 
   const total=cl.reduce((s,t)=>s+(pctOf(t)??0),0);
-  // Scale the ring against the target when up, against the max drawdown when down.
-  const scale = total>=0 ? (num(a.targetPct)||10) : (num(a.maxDDPct)||10);
-  const frac = Math.min(1, Math.abs(total)/scale);
+  // No target to measure against any more, so the arc just gives the number a shape:
+  // 10% of account fills the ring. The figure in the middle is the point.
+  const frac = Math.min(1, Math.abs(total)/10);
 
   return `<div class="rings">
     ${donut(wr/100, "var(--up)", fx(wr,0)+"%", "win rate")}
     ${donut(share/100, "var(--blue-lift)", fx(share,0)+"%", top?top[0]:"—")}
-    ${donut(frac, total>=0?"var(--up)":"var(--down)", asPct(total), total>=0?"of target":"of max DD")}
+    ${donut(frac, total>=0?"var(--up)":"var(--down)", asPct(total), "lifetime")}
   </div>`;
 }
 
@@ -1019,34 +994,18 @@ function screenIntake(){
 /* ---------- settings ---------- */
 function screenSettings(){
   const a=S.account;
-  const f=(k,l,step="any")=>`<div class="field"><span class="lab">${l}</span>
-    <input class="n" type="number" step="${step}" data-acct="${k}" value="${a[k]??""}"></div>`;
   return `${head("Settings")}
-  <div class="sec-t">Account</div>
-  <div class="field"><span class="lab">Prop firm</span>
-    <input type="text" data-acct="firm" value="${esc(a.firm||"")}" placeholder="FTMO"></div>
-  ${f("size","Account size","1")}
-  <div class="three" style="margin-bottom:22px">
-    ${f("dailyDDPct","Firm daily %")}${f("maxDDPct","Firm max %")}${f("targetPct","Target %")}
-  </div>
-  <p class="note">Stopping at ${a.ownDailyStopPct}% against a ${a.dailyDDPct}% firm limit leaves
-    ${fx(a.dailyDDPct-a.ownDailyStopPct,1)}% for slippage, gaps, and being wrong about your own discipline.</p>
+  <div class="sec-t">The rule</div>
+  <div class="field"><span class="lab">Trades per day</span>
+    <input class="n" type="number" step="1" min="1" data-acct="maxTradesDay" value="${a.maxTradesDay??2}">
+    <span class="why">The only rule the app enforces. Two exists so the question is
+      "is this a master setup?" rather than "am I allowed?".</span></div>
 
   <hr class="rule">
-  <div class="sec-t">Your rules</div>
-  <div class="two" style="margin-bottom:22px">${f("ownDailyStopPct","Daily stop %")}${f("ownWeeklyStopPct","Weekly stop %")}</div>
-  <div class="three" style="margin-bottom:22px">
-    ${f("maxTradesDay","Trades/day","1")}${f("maxConsecLosses","Losses in a row","1")}${f("minRR","Min RR","0.1")}
-  </div>
-  <label class="check">
-    <input type="checkbox" data-acctbool="greenLock" ${a.greenLock?"checked":""}>
-    <span class="q">Green-lock<span class="why">Stop for the day if trade 1 closes +2R or better</span></span></label>
-
   <label class="check">
     <input type="checkbox" data-testing ${S.testing?"checked":""}>
-    <span class="q">Testing mode<span class="why">Suspends every block — trade count, daily stop,
-      losing streak, weekly stop — so you can put trades in freely. This device only, and it
-      changes nothing about the rules above.</span></span></label>
+    <span class="q">Testing mode<span class="why">Lifts the trade limit so you can put trades in
+      freely. This device only.</span></span></label>
 
   <hr class="rule">
   <div class="sec-t">Data</div>
@@ -1109,9 +1068,10 @@ document.addEventListener("submit", async e=>{
 });
 
 document.addEventListener("click", async e=>{
-  const t=e.target.closest("[data-go],[data-map],[data-act],[data-set],[data-tick],[data-gate],[data-risk],[data-etype],[data-result],[data-mis],[data-trade],[data-period],[data-dash]");
+  const t=e.target.closest("[data-go],[data-map],[data-act],[data-set],[data-tick],[data-gate],[data-risk],[data-etype],[data-ckdir],[data-result],[data-mis],[data-trade],[data-period],[data-dash]");
   if(!t) return;
 
+  if(t.dataset.ckdir){ S.ckDir=t.dataset.ckdir; S.keepScroll=true; render(); return; }
   if(t.dataset.etype){
     S.draft.model = t.dataset.etype;
     S.keepScroll=true; render(); return;
