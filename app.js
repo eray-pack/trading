@@ -6,7 +6,7 @@
 
 /* Bumped with every deploy, shown in Settings, so "am I actually on the new build?"
    has an answer that doesn't involve guessing at the service worker. */
-const BUILD = "v12";
+const BUILD = "v13";
 
 const SUPABASE_URL = "https://ovigsifjypyznhvshmsl.supabase.co";
 const SUPABASE_KEY = "sb_publishable_C_Nv_U7v1gnxpL4OMmJPOA_4ryMrT6V";
@@ -468,6 +468,8 @@ function screenAuth(){
       <button class="btn pri" type="submit" style="margin-top:10px">Sign in</button>
     </form>
     <button class="link" data-act="signup" style="margin-top:20px">Create an account</button>
+    ${S.authMsg ? `<p class="note ${S.authBad?"bad":""}" style="margin-top:20px;text-align:left">
+      ${esc(S.authMsg)}</p>` : ""}
   </div>`;
 }
 
@@ -1063,9 +1065,31 @@ document.addEventListener("submit", async e=>{
   if(e.target.id!=="authform") return;
   e.preventDefault();
   const email=$("#email").value.trim(), pw=$("#pw").value;
+  S.authMsg=""; S.authBad=false;
   const {error}=await sb.auth.signInWithPassword({email,password:pw});
-  if(error) toast(error.message);
+  if(error){ S.authBad=true; S.authMsg=authHelp(error); render(); }
 });
+
+/* Supabase's auth errors are terse and the causes are nearly always config,
+   not the person typing. Say what to actually do about it. */
+function authHelp(error){
+  const m=(error?.message||"").toLowerCase();
+  if(m.includes("rate limit") || m.includes("too many"))
+    return "Too many sign-up emails were sent from this project recently. "
+         + "Turn off \"Confirm email\" in the Supabase dashboard (Authentication → Sign In / Providers → Email) "
+         + "and no email needs sending at all.";
+  if(m.includes("signups not allowed") || m.includes("signup is disabled"))
+    return "New sign-ups are switched off for this project. Turn on \"Allow new users to sign up\" "
+         + "in the Supabase dashboard under Authentication → Sign In / Providers.";
+  if(m.includes("not confirmed"))
+    return "This account exists but the email was never confirmed. Either click the link in the "
+         + "confirmation email, or turn off \"Confirm email\" in the Supabase dashboard.";
+  if(m.includes("invalid login"))
+    return "Wrong email or password — or the account doesn't exist yet. Use \"Create an account\" first.";
+  if(m.includes("already registered") || m.includes("already been registered"))
+    return "That email already has an account. Sign in instead.";
+  return error?.message || "Something went wrong.";
+}
 
 document.addEventListener("click", async e=>{
   const t=e.target.closest("[data-go],[data-map],[data-act],[data-set],[data-tick],[data-gate],[data-risk],[data-etype],[data-ckdir],[data-result],[data-mis],[data-trade],[data-period],[data-dash]");
@@ -1136,9 +1160,16 @@ document.addEventListener("click", async e=>{
     case "signup": {
       const email=$("#email").value.trim(), pw=$("#pw").value;
       if(!email||pw.length<8) return toast("Email, and a password of at least 8 characters");
-      const {error}=await sb.auth.signUp({email,password:pw});
-      if(error) toast(error.message);
-      else toast("Account created — signing you in");
+      S.authMsg=""; S.authBad=false;
+      const {data,error}=await sb.auth.signUp({email,password:pw});
+      if(error){ S.authBad=true; S.authMsg=authHelp(error); render(); break; }
+      // A user with no session means the project still requires email confirmation.
+      if(data?.user && !data?.session){
+        S.authBad=false;
+        S.authMsg="Account created. Check your email for a confirmation link, then sign in. "
+                + "To skip this step in future, turn off \"Confirm email\" in the Supabase dashboard.";
+        render();
+      } else toast("Account created — signing you in");
       break;
     }
     case "signout": await sb.auth.signOut(); S.user=null; S.trades=[]; render(); break;
