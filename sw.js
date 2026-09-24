@@ -1,7 +1,7 @@
 /* Caches the app shell so the journal opens instantly, even on a bad connection.
    Trade data always comes from the network — a stale P&L is worse than no P&L. */
 
-const CACHE = "confluence-v13";
+const CACHE = "confluence-v14";
 
 /* The files that change when I ship. These go network-first: a deploy has to reach
    the installed app on the next launch, not the one after. */

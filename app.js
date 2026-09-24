@@ -6,7 +6,7 @@
 
 /* Bumped with every deploy, shown in Settings, so "am I actually on the new build?"
    has an answer that doesn't involve guessing at the service worker. */
-const BUILD = "v13";
+const BUILD = "v14";
 
 const SUPABASE_URL = "https://ovigsifjypyznhvshmsl.supabase.co";
 const SUPABASE_KEY = "sb_publishable_C_Nv_U7v1gnxpL4OMmJPOA_4ryMrT6V";
@@ -1199,16 +1199,10 @@ document.addEventListener("click", async e=>{
     }
     case "savetrade": {
       if(S.busy) break;
-      const d=S.draft, a=S.account;
-
-      const confs=(m?.confluences||[]).filter(Boolean);
-      const ticked=(d.confluences||[]).filter(c=>confs.includes(c)).length;
-      const G=gradeFor(ticked);
-      const risk = d.riskPct!=null ? num(d.riskPct) : G.risk;
-      if(!risk) return toast("Pick the risk for this trade first");
-      const body={...d, grade:G.g, riskPct:risk,
-        riskUsd:(num(a.size)||0)*(risk/100),
-        plannedRR:null};
+      const d=S.draft;
+      const risk = num(d.riskPct);
+      if(!risk){ toast("Pick the risk for this trade first"); break; }
+      const body={...d, grade:"", riskPct:risk, riskUsd:null, plannedRR:null};
       S.busy=true; t.textContent="Saving…";
       try{ await saveTrade(body); S.draft=null; go("home"); toast("Logged"); }
       catch(_){ t.textContent="Log it"; }
